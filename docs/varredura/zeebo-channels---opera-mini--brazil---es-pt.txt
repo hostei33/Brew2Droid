@@ -1,4 +1,0 @@
-Zeebo Channels - Opera Mini (Brazil) (Es,Pt)
-estado: não cria o applet
-motivo: CreateInstance recusou com o erro 1
-nada a apontar
