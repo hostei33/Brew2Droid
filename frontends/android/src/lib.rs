@@ -23,7 +23,6 @@ mod biblioteca;
 mod density;
 mod entrada;
 mod input_dispatch;
-mod estado;
 mod fps;
 mod frame_profile;
 mod audio_focus;
