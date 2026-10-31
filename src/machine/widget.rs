@@ -718,7 +718,9 @@ impl<C: CpuBackend> Machine<C> {
             let passo = (fonte.ascent(FONT_SIZE) + fonte.descent(FONT_SIZE)) as i32 + 2;
             let linhas: Vec<String> = paragrafos
                 .iter()
-                .flat_map(|paragrafo| quebra_linhas(paragrafo, largura, |t| fonte.width(t, FONT_SIZE)))
+                .flat_map(|paragrafo| {
+                    quebra_linhas(paragrafo, largura, |t| fonte.width(t, FONT_SIZE))
+                })
                 .collect();
             let limite = match altura {
                 0 => i32::MAX,
@@ -929,7 +931,10 @@ impl<C: CpuBackend> Machine<C> {
         // `0x161`, que para nós é o próprio widget. O conteúdo ainda não foi lido por ninguém, e
         // é ele que o [`Machine::pinta_html`] mostra no lugar do placeholder.
         if name == "AdicionarFilho"
-            && self.widgets.get(&this).is_some_and(|w| w.classe == WIDGET_HTML)
+            && self
+                .widgets
+                .get(&this)
+                .is_some_and(|w| w.classe == WIDGET_HTML)
         {
             if let Some(pagina) = self.sources.get(&self.cpu.read_reg(Reg::R1)) {
                 self.paginas_html.insert(this, pagina.clone());
@@ -1091,7 +1096,10 @@ impl<C: CpuBackend> Machine<C> {
                 // viva com a animação de 40 ms armada sobre memória já solta. (Uma tentativa
                 // antiga de soltar aqui punha ícones atrás do roller; a causa era o
                 // `ObjectStore` ressuscitar endereços livres, já corrigida.) O `pai` fica.
-                let topo = self.widgets.get_mut(&this).and_then(|widget| widget.anexados.pop());
+                let topo = self
+                    .widgets
+                    .get_mut(&this)
+                    .and_then(|widget| widget.anexados.pop());
                 if let Some(formulario) = topo {
                     self.solta_widget(formulario)?;
                 }
@@ -1362,7 +1370,10 @@ impl<C: CpuBackend> Machine<C> {
                 if self.censo_de_widgets {
                     let classe = self.widgets.get(&this).map_or(0, |widget| widget.classe);
                     let vezes = {
-                        let contagem = self.seletores_por_classe.entry((classe, seletor)).or_insert(0);
+                        let contagem = self
+                            .seletores_por_classe
+                            .entry((classe, seletor))
+                            .or_insert(0);
                         *contagem += 1;
                         *contagem
                     };
@@ -1420,7 +1431,10 @@ impl<C: CpuBackend> Machine<C> {
                         // já estava criado ficava solto na tela, sem formulário.
                         let objeto = id >= PRIMEIRO_OBJETO
                             || (id == PROP_HTML_OBJETO
-                                && self.widgets.get(&this).is_some_and(|w| w.classe == WIDGET_HTML));
+                                && self
+                                    .widgets
+                                    .get(&this)
+                                    .is_some_and(|w| w.classe == WIDGET_HTML));
                         let valor = match objeto {
                             true => self.filho_do_widget(this, id)?,
                             false => self
@@ -1478,7 +1492,9 @@ impl<C: CpuBackend> Machine<C> {
                     // `0` é `NONE`. É com o `NEXT` e o `PREV` que a lista de jogos passa o foco da
                     // barra de abas para as capas (`0x4025c`, chamado com `3`); guardar o `3` como
                     // se fosse o filho em foco deixava o foco em lugar nenhum e nada se destacava.
-                    FOCO_DEFINE if !self.widgets.contains_key(&terceiro) && terceiro <= FOCO_ANTERIOR => {
+                    FOCO_DEFINE
+                        if !self.widgets.contains_key(&terceiro) && terceiro <= FOCO_ANTERIOR =>
+                    {
                         u32::from(self.move_foco(this, terceiro)?)
                     }
                     // Com um widget de verdade, quem sai e quem entra também são avisados. É assim
@@ -1735,7 +1751,8 @@ impl<C: CpuBackend> Machine<C> {
             return Ok(false);
         }
         self.cpu.write_u32(resposta, 0)?;
-        let _ = self.call_guest_aninhado(funcao, [contexto, PODE_TER_FOCO, 0, resposta], QSORT_BUDGET)?;
+        let _ =
+            self.call_guest_aninhado(funcao, [contexto, PODE_TER_FOCO, 0, resposta], QSORT_BUDGET)?;
         let pode = self.cpu.read_u32(resposta)? & 0xff != 0;
         self.libera(resposta);
         Ok(pode)
@@ -1752,7 +1769,8 @@ impl<C: CpuBackend> Machine<C> {
         if funcao == 0 || !self.widgets_avisando.insert(widget) {
             return Ok(());
         }
-        let saida = self.call_guest_aninhado(funcao, [contexto, evento, parametro, 0], QSORT_BUDGET);
+        let saida =
+            self.call_guest_aninhado(funcao, [contexto, evento, parametro, 0], QSORT_BUDGET);
         self.widgets_avisando.remove(&widget);
         saida?;
         Ok(())
@@ -1798,7 +1816,8 @@ impl<C: CpuBackend> Machine<C> {
                 (widget.liberadores.1, widget.desenho.1),
             ] {
                 if liberador != 0 {
-                    let _ = self.call_guest_aninhado(liberador, [contexto, 0, 0, 0], QSORT_BUDGET)?;
+                    let _ =
+                        self.call_guest_aninhado(liberador, [contexto, 0, 0, 0], QSORT_BUDGET)?;
                 }
             }
             for filho in widget
@@ -1843,11 +1862,27 @@ mod testes_do_container {
     #[test]
     fn percorre_a_pilha_nos_dois_sentidos_e_para_na_ponta() {
         let pilha = [10, 20, 30];
-        assert_eq!(vizinho_na_pilha(&pilha, 0, false, false), 30, "sem referência, o de cima");
-        assert_eq!(vizinho_na_pilha(&pilha, 0, true, false), 10, "sem referência, o de baixo");
+        assert_eq!(
+            vizinho_na_pilha(&pilha, 0, false, false),
+            30,
+            "sem referência, o de cima"
+        );
+        assert_eq!(
+            vizinho_na_pilha(&pilha, 0, true, false),
+            10,
+            "sem referência, o de baixo"
+        );
         assert_eq!(vizinho_na_pilha(&pilha, 30, false, false), 20);
-        assert_eq!(vizinho_na_pilha(&pilha, 10, false, false), 0, "a ponta termina o laço");
-        assert_eq!(vizinho_na_pilha(&pilha, 10, false, true), 30, "com volta, dá a volta");
+        assert_eq!(
+            vizinho_na_pilha(&pilha, 10, false, false),
+            0,
+            "a ponta termina o laço"
+        );
+        assert_eq!(
+            vizinho_na_pilha(&pilha, 10, false, true),
+            30,
+            "com volta, dá a volta"
+        );
         assert_eq!(vizinho_na_pilha(&pilha, 20, true, false), 30);
         assert_eq!(vizinho_na_pilha(&[], 0, true, true), 0);
     }
@@ -1917,7 +1952,11 @@ pub fn texto_do_html(html: &str) -> Vec<String> {
             break;
         };
         let tag = resto[abre + 1..abre + fim].trim().to_ascii_lowercase();
-        let nome = tag.split_whitespace().next().unwrap_or("").trim_end_matches('/');
+        let nome = tag
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
         if BLOCOS.contains(&nome) || BLOCOS.contains(&tag.as_str()) {
             fecha(&mut atual, &mut paragrafos);
         }
@@ -1944,16 +1983,57 @@ fn decodifica_pagina(bytes: &[u8]) -> String {
 /// (`n&atilde;o`, `est&aacute;`); as nomeadas que faltam aqui ficam como vieram.
 fn decodifica_entidades(texto: &str) -> String {
     const NOMEADAS: &[(&str, char)] = &[
-        ("nbsp", ' '), ("lt", '<'), ("gt", '>'), ("quot", '"'), ("amp", '&'), ("apos", '\''),
-        ("aacute", 'á'), ("agrave", 'à'), ("acirc", 'â'), ("atilde", 'ã'), ("auml", 'ä'),
-        ("eacute", 'é'), ("egrave", 'è'), ("ecirc", 'ê'), ("iacute", 'í'), ("icirc", 'î'),
-        ("oacute", 'ó'), ("ocirc", 'ô'), ("otilde", 'õ'), ("ouml", 'ö'), ("uacute", 'ú'),
-        ("uuml", 'ü'), ("ccedil", 'ç'), ("ntilde", 'ñ'), ("Aacute", 'Á'), ("Agrave", 'À'),
-        ("Acirc", 'Â'), ("Atilde", 'Ã'), ("Eacute", 'É'), ("Ecirc", 'Ê'), ("Iacute", 'Í'),
-        ("Oacute", 'Ó'), ("Ocirc", 'Ô'), ("Otilde", 'Õ'), ("Uacute", 'Ú'), ("Ccedil", 'Ç'),
-        ("Ntilde", 'Ñ'), ("ordm", 'º'), ("ordf", 'ª'), ("copy", '©'), ("reg", '®'),
-        ("deg", '°'), ("iexcl", '¡'), ("iquest", '¿'), ("trade", '™'), ("hellip", '…'),
-        ("ndash", '–'), ("mdash", '—'), ("laquo", '«'), ("raquo", '»'), ("bull", '•'),
+        ("nbsp", ' '),
+        ("lt", '<'),
+        ("gt", '>'),
+        ("quot", '"'),
+        ("amp", '&'),
+        ("apos", '\''),
+        ("aacute", 'á'),
+        ("agrave", 'à'),
+        ("acirc", 'â'),
+        ("atilde", 'ã'),
+        ("auml", 'ä'),
+        ("eacute", 'é'),
+        ("egrave", 'è'),
+        ("ecirc", 'ê'),
+        ("iacute", 'í'),
+        ("icirc", 'î'),
+        ("oacute", 'ó'),
+        ("ocirc", 'ô'),
+        ("otilde", 'õ'),
+        ("ouml", 'ö'),
+        ("uacute", 'ú'),
+        ("uuml", 'ü'),
+        ("ccedil", 'ç'),
+        ("ntilde", 'ñ'),
+        ("Aacute", 'Á'),
+        ("Agrave", 'À'),
+        ("Acirc", 'Â'),
+        ("Atilde", 'Ã'),
+        ("Eacute", 'É'),
+        ("Ecirc", 'Ê'),
+        ("Iacute", 'Í'),
+        ("Oacute", 'Ó'),
+        ("Ocirc", 'Ô'),
+        ("Otilde", 'Õ'),
+        ("Uacute", 'Ú'),
+        ("Ccedil", 'Ç'),
+        ("Ntilde", 'Ñ'),
+        ("ordm", 'º'),
+        ("ordf", 'ª'),
+        ("copy", '©'),
+        ("reg", '®'),
+        ("deg", '°'),
+        ("iexcl", '¡'),
+        ("iquest", '¿'),
+        ("trade", '™'),
+        ("hellip", '…'),
+        ("ndash", '–'),
+        ("mdash", '—'),
+        ("laquo", '«'),
+        ("raquo", '»'),
+        ("bull", '•'),
     ];
     let mut saida = String::with_capacity(texto.len());
     let mut resto = texto;
@@ -2042,7 +2122,15 @@ fn unidades(paragrafo: &str) -> Vec<(bool, String)> {
             }
             continue;
         }
-        if e_cjk(c) {
+        // Um sinal que se apoia na letra anterior não pode abrir linha: no tailandês, no laosiano,
+        // no birmanês e no khmer a vogal e o tom ficam pendurados na consoante.
+        if marcador(c) {
+            if let Some((_, ultima)) = saida.last_mut() {
+                ultima.push(c);
+                continue;
+            }
+        }
+        if e_sem_espaco(c) {
             fecha(&mut saida, &mut palavra, &mut espaco);
             if e_fecho(c) {
                 if let Some((_, ultima)) = saida.last_mut() {
@@ -2085,12 +2173,61 @@ fn e_cjk(c: char) -> bool {
     )
 }
 
+/// As escritas que não separam palavra por espaço.
+///
+/// O tailandês, o laosiano, o birmanês e o khmer escrevem tudo grudado, como o chinês: sem
+/// tratar cada letra como um ponto de quebra, o parágrafo inteiro vira uma "palavra" só e o fim
+/// do texto desaparece no recorte do controle.
+fn e_sem_espaco(c: char) -> bool {
+    e_cjk(c)
+        || matches!(c as u32,
+            0x0E00..=0x0E7F |   // tailandês
+            0x0E80..=0x0EFF |   // laosiano
+            0x0F00..=0x0FFF |   // tibetano
+            0x1000..=0x109F |   // birmanês
+            0x1780..=0x17FF     // khmer
+        )
+}
+
+/// Os sinais que se penduram na letra anterior e não podem começar linha.
+fn marcador(c: char) -> bool {
+    matches!(c as u32,
+        0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E |        // tailandês: vogal e tom
+        0x0EB1 | 0x0EB4..=0x0EBC | 0x0EC8..=0x0ECD |        // laosiano
+        0x0F71..=0x0F84 | 0x0F86..=0x0F87 |                 // tibetano
+        0x102B..=0x103E | 0x1056..=0x1059 | 0x105E..=0x1060 |
+        0x1062..=0x1064 | 0x1067..=0x106D | 0x1071..=0x1074 |
+        0x1082..=0x108D | 0x108F | 0x109A..=0x109D |        // birmanês
+        0x17B6..=0x17D3 | 0x17DD                            // khmer
+    )
+}
+
 /// A pontuação que não pode começar linha.
 fn e_fecho(c: char) -> bool {
     matches!(
         c,
-        '。' | '，' | '、' | '；' | '：' | '？' | '！' | '）' | '］' | '｝' | '」' | '』' | '】'
-            | '》' | '〉' | '”' | '’' | '·' | '…' | '—' | '～' | '％' | '〟'
+        '。' | '，'
+            | '、'
+            | '；'
+            | '：'
+            | '？'
+            | '！'
+            | '）'
+            | '］'
+            | '｝'
+            | '」'
+            | '』'
+            | '】'
+            | '》'
+            | '〉'
+            | '”'
+            | '’'
+            | '·'
+            | '…'
+            | '—'
+            | '～'
+            | '％'
+            | '〟'
     )
 }
 
@@ -2100,7 +2237,8 @@ mod testes_do_html {
 
     #[test]
     fn blocos_viram_paragrafos_e_tags_somem() {
-        let html = "<h1>Ajuda</h1><p>Um <b>texto</b>\n  com   espaços &amp; tags.</p>linha<br>outra";
+        let html =
+            "<h1>Ajuda</h1><p>Um <b>texto</b>\n  com   espaços &amp; tags.</p>linha<br>outra";
         assert_eq!(
             texto_do_html(html),
             ["Ajuda", "Um texto com espaços & tags.", "linha", "outra"]
@@ -2109,8 +2247,12 @@ mod testes_do_html {
 
     #[test]
     fn acentos_em_entidade_viram_letras() {
-        let html = "<center>Iniciando</center>\n<p>n&atilde;o est&aacute; &#233; &amp;c &foo; a&b</p>";
-        assert_eq!(texto_do_html(html), ["Iniciando", "não está é &c &foo; a&b"]);
+        let html =
+            "<center>Iniciando</center>\n<p>n&atilde;o est&aacute; &#233; &amp;c &foo; a&b</p>";
+        assert_eq!(
+            texto_do_html(html),
+            ["Iniciando", "não está é &c &foo; a&b"]
+        );
     }
 
     #[test]
@@ -2133,6 +2275,23 @@ mod testes_do_html {
     fn a_pontuacao_anda_com_o_ideograma_anterior() {
         let mede = |t: &str| t.chars().count() as u32;
         assert_eq!(quebra_linhas("你好，世界", 3, mede), ["你好，", "世界"]);
+    }
+
+    /// O tailandês também não tem espaço: quebra entre letras, não no fim do parágrafo.
+    #[test]
+    fn o_tailandes_quebra_entre_letras() {
+        let mede = |t: &str| t.chars().count() as u32;
+        // A régua aqui conta unidades de código, não largura: o que se prova é que a quebra
+        // acontece entre letras, e que o `ั` de `สวัส` não ficou sozinho na linha seguinte.
+        assert_eq!(quebra_linhas("สวัสดีชาวโลก", 4, mede), ["สวัส", "ดีชา", "วโลก"]);
+    }
+
+    /// A vogal e o tom tailandeses ficam na letra anterior, nunca sozinhos no começo da linha.
+    #[test]
+    fn o_sinal_tailandes_anda_com_a_letra() {
+        let mede = |t: &str| t.chars().count() as u32;
+        // "กิ" são duas unidades de código mas uma letra com a vogal em cima.
+        assert_eq!(quebra_linhas("กิกิ", 1, mede), ["กิ", "กิ"]);
     }
 
     /// Texto misturado: as palavras latinas continuam inteiras e com o espaço que tinham.
