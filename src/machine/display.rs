@@ -1114,10 +1114,25 @@ impl<C: CpuBackend> Machine<C> {
         for glifo in glifos {
             for linha in 0..glifo.height {
                 for coluna in 0..glifo.width {
-                    // Meio-tom não existe numa superfície sem canal alfa: ou a letra cobre o
-                    // pixel, ou não cobre. Metade é o corte que deixa a borda parecida com a
-                    // do console, que também não mistura.
-                    if glifo.coverage[(linha * glifo.width + coluna) as usize] < 128 {
+                    let cobertura = glifo.coverage[(linha * glifo.width + coluna) as usize];
+                    // A fonte do jogo desenha a borda dura do console: ou a letra cobre o pixel,
+                    // ou não. Meio-tom ali só borraria o desenho que o jogo já preparou.
+                    //
+                    // O glifo de reserva é outro caso. Um ideograma de 13 px tem horizontais
+                    // com menos de um pixel: a cobertura se divide entre duas linhas e nenhuma
+                    // das duas chega a 50%, então o corte em 128 **some com o traço** — é o
+                    // `美` que perde a base e o `国` que perde o `玉`. Neles o pixel é pintado
+                    // na proporção da cobertura, e o traço sai cinza em vez de sair faltando.
+                    let alfa = match glifo.suave {
+                        // Um pouco acima da cobertura crua: metade do traço já é pouco, e a
+                        // mistura exata clarearia demais num ideograma deste tamanho.
+                        true => (u16::from(cobertura) * 3 / 2).min(255) as u8,
+                        false => match cobertura >= 128 {
+                            true => 255,
+                            false => 0,
+                        },
+                    };
+                    if alfa == 0 {
                         continue;
                     }
                     let (px, py) = (x + glifo.x + coluna as i32, y + glifo.y + linha as i32);
@@ -1130,7 +1145,13 @@ impl<C: CpuBackend> Machine<C> {
                             continue;
                         }
                     }
-                    surface.set_pixel_native(px, py, nativo);
+                    match alfa {
+                        255 => surface.set_pixel_native(px, py, nativo),
+                        _ => {
+                            let fundo = surface.get_pixel(px, py);
+                            surface.set_pixel_native(px, py, mistura(fundo, nativo, alfa));
+                        }
+                    }
                 }
             }
         }
@@ -1178,6 +1199,24 @@ const IDF_ALIGN_TOP: u32 = 0x100;
 const IDF_ALIGN_MIDDLE: u32 = 0x200;
 const IDF_ALIGN_BOTTOM: u32 = 0x400;
 
+/// Mistura `frente` sobre `fundo`, na proporção `alfa` (0 = só o fundo, 255 = só a frente).
+///
+/// As duas cores chegam em RGB565, o formato da tela; a conta passa por 8 bits por canal porque é
+/// assim que a cor é lida, e volta para 565 no fim. A superfície não tem canal alfa — a mistura é
+/// feita na hora de gravar, contra o que já estava lá.
+fn mistura(fundo: u16, frente: u16, alfa: u8) -> u16 {
+    let (a, b) = (Rgb::from_rgb565(fundo), Rgb::from_rgb565(frente));
+    let peso = |x: u8, y: u8| {
+        ((u32::from(x) * u32::from(255 - alfa) + u32::from(y) * u32::from(alfa)) / 255) as u8
+    };
+    Rgb {
+        r: peso(a.r, b.r),
+        g: peso(a.g, b.g),
+        b: peso(a.b, b.b),
+    }
+    .to_rgb565()
+}
+
 /// Onde o texto começa, dado o retângulo e os alinhamentos. Um eixo sem alinhamento fica com a
 /// coordenada que o jogo passou.
 fn posicao_do_texto(
@@ -1210,6 +1249,33 @@ fn posicao_do_texto(
 #[cfg(test)]
 mod testes_do_texto {
     use super::*;
+
+    /// A mistura é o que impede o traço fino de sumir: cobertura 0 não pinta, 255 pinta a cor
+    /// cheia, e o meio fica entre as duas.
+    #[test]
+    fn a_mistura_vai_do_fundo_a_frente() {
+        let fundo = Rgb {
+            r: 150,
+            g: 160,
+            b: 110,
+        }
+        .to_rgb565();
+        let frente = Rgb {
+            r: 20,
+            g: 24,
+            b: 16,
+        }
+        .to_rgb565();
+        assert_eq!(mistura(fundo, frente, 0), fundo);
+        assert_eq!(mistura(fundo, frente, 255), frente);
+
+        // Com pouca cobertura o pixel fica mais perto do fundo do que da frente: é o que
+        // preserva a borda do traço sem engrossá-la.
+        let meio = Rgb::from_rgb565(mistura(fundo, frente, 64));
+        let (a, b) = (Rgb::from_rgb565(fundo), Rgb::from_rgb565(frente));
+        assert!(meio.r < a.r && meio.r > b.r, "meio fora da faixa: {meio:?}");
+        assert!(a.r - meio.r < meio.r - b.r, "meio pesado demais: {meio:?}");
+    }
 
     #[test]
     fn o_rotulo_da_barra_de_abas_fica_no_centro_do_retangulo() {

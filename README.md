@@ -49,6 +49,13 @@ game ships no font at all, the system font becomes the main one. `.ttc` collecti
 face that draws the text — the Simplified Chinese one for a Chinese string, the Japanese one is never
 picked by accident.
 
+The fallback is painted differently from the game's own font. A font like `tectoy.ttf` was drawn for
+the size it appears at, so every pixel is either ink or background and the edge stays hard, the way
+the console looks. A 13 px ideograph from a vector font is not like that: its horizontal strokes are
+thinner than one pixel, the coverage splits between two rows, and cutting at 50% **drops the stroke
+entirely** — `美` lost the base, `国` lost the `玉` inside. Fallback glyphs are therefore blended with
+whatever is already on screen, so a half-covered pixel comes out grey instead of vanishing.
+
 Line breaking follows the script too: Chinese, Japanese and Korean have no spaces between words, so
 they break between characters, and closing punctuation never starts a line.
 

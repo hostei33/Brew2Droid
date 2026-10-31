@@ -149,6 +149,15 @@ pub struct Glyph {
     pub height: u32,
     /// Cobertura por pixel, de 0 a 255, na ordem de leitura.
     pub coverage: Vec<u8>,
+    /// Se o glifo veio de uma fonte de reserva, e não da fonte do jogo.
+    ///
+    /// A diferença aparece na hora de pintar. A fonte do jogo foi desenhada para o tamanho em
+    /// que o texto aparece, com a borda dura do console: pintar cada pixel em "escreve ou não
+    /// escreve" mantém essa borda. Um ideograma de 13 px vindo de um `.ttf` não tem essa
+    /// propriedade — as horizontais ficam com menos de um pixel de espessura, a cobertura se
+    /// divide entre duas linhas, e o corte em 50% **apaga o traço inteiro**. É por isso que
+    /// `美` vira dois pontos no lugar da base, e que `国` perde o `玉` de dentro.
+    pub suave: bool,
 }
 
 impl Font {
@@ -402,7 +411,12 @@ impl Font {
                 continue;
             };
             let caixa = desenho.px_bounds();
-            let (largura, altura) = (caixa.width() as u32, caixa.height() as u32);
+            // Para baixo e para cima, respectivamente: a caixa vem em ponto flutuante, e
+            // truncar as duas pontas jogaria fora a última coluna e a última linha do glifo.
+            let (largura, altura) = (
+                caixa.width().ceil() as u32,
+                caixa.height().ceil() as u32,
+            );
             if largura == 0 || altura == 0 {
                 continue;
             }
@@ -414,11 +428,12 @@ impl Font {
                 }
             });
             saida.push(Glyph {
-                x: caixa.min.x as i32,
-                y: caixa.min.y as i32,
+                x: caixa.min.x.floor() as i32,
+                y: caixa.min.y.floor() as i32,
                 width: largura,
                 height: altura,
                 coverage,
+                suave: origem != 0,
             });
         }
         saida
@@ -663,6 +678,39 @@ mod tests {
         assert_eq!(sozinha, com_reserva);
     }
 
+    /// O glifo da reserva é marcado para ser pintado com mistura — e há traço que o corte duro
+    /// jogaria fora.
+    ///
+    /// Num ideograma de 13 px as horizontais têm menos de um pixel: a cobertura se divide entre
+    /// duas linhas e **nenhuma** chega a 50%. Com o corte em 128 que serve à fonte do jogo, o
+    /// traço some — era o `美` sem a base e o `国` sem o `玉` de dentro. O teste fixa as duas
+    /// metades da correção: a marca no glifo, e a existência de pixels de meia cobertura.
+    #[test]
+    fn o_ideograma_tem_traco_que_o_corte_jogaria_fora() {
+        let (Some(principal), Some(reserva)) = (fonte_sem_cjk(), reserva()) else {
+            return;
+        };
+        let fonte = principal.com_reserva(reserva);
+        let ideogramas = fonte.layout("美国", 16.0);
+        assert_eq!(ideogramas.len(), 2);
+        assert!(
+            ideogramas.iter().all(|g| g.suave),
+            "ideograma saiu sem a marca de mistura"
+        );
+        // A fonte do jogo continua no corte duro: a borda dela é a do console.
+        assert!(fonte.layout("Jogar", 16.0).iter().all(|g| !g.suave));
+
+        let medios = ideogramas
+            .iter()
+            .flat_map(|g| &g.coverage)
+            .filter(|&&v| v > 0 && v < 128)
+            .count();
+        assert!(
+            medios > 0,
+            "nenhum pixel de meia cobertura: o corte em 128 não perderia nada e este teste perdeu o sentido"
+        );
+    }
+
     /// Uma reserva que não desenha ideograma é pulada, e a seguinte assume.
     ///
     /// É o caso real: o usuário põe uma fonte na pasta e ela não é de chinês. Ela não pode
@@ -760,6 +808,27 @@ mod prova_visual {
         println!("escrito /tmp/cjk_antes.pgm e /tmp/cjk_depois.pgm");
     }
 
+    /// O que a mistura muda num ideograma de 13 px: sem ela o traço fino some.
+    #[test]
+    #[ignore]
+    fn desenha_com_e_sem_mistura() {
+        let (Some(outra), Some(reserva)) = (tests::fonte_latina(), tests::reserva()) else {
+            return;
+        };
+        let fonte = outra.com_reserva(reserva);
+        let linhas = [
+            "美国",
+            "时间 02:54",
+            "部门地下车库",
+            "刹达停车场",
+            "这个任务可以",
+            "算完成了。",
+        ];
+        despeja_cor("/tmp/sem_mistura.ppm", &fonte, &linhas, false);
+        despeja_cor("/tmp/com_mistura.ppm", &fonte, &linhas, true);
+        println!("escrito /tmp/sem_mistura.ppm e /tmp/com_mistura.ppm");
+    }
+
     /// O que a `Noto Sans CJK` cobre além do chinês: kana, hangul, cirílico e grego saem certos
     /// com um glifo por caractere, sem *shaping*.
     #[test]
@@ -803,6 +872,52 @@ mod prova_visual {
         }
         let mut saida = format!("P5\n{largura} {altura}\n255\n").into_bytes();
         saida.extend_from_slice(&tela);
+        std::fs::write(caminho, saida).unwrap();
+    }
+
+    /// Como [`despeja`], mas em cor e com a escolha de pintar por mistura — é o que
+    /// `Machine::escreve` faz quando o glifo vem da reserva.
+    fn despeja_cor(caminho: &str, fonte: &Font, linhas: &[&str], misturar: bool) {
+        let (largura, altura) = (200usize, 130usize);
+        let fundo = [150u8, 160, 110];
+        let frente = [20u8, 24, 16];
+        let mut tela = vec![fundo; largura * altura];
+        for (i, texto) in linhas.iter().enumerate() {
+            let y = 2 + i as i32 * 20;
+            for g in fonte.layout(texto, 16.0) {
+                for ly in 0..g.height as i32 {
+                    for lx in 0..g.width as i32 {
+                        let cobertura = g.coverage[(ly as u32 * g.width + lx as u32) as usize];
+                        // A mesma conta do `escreve`: mistura só no glifo da reserva, e com o
+                        // ganho de 1,5 que compensa a espessura de um pixel.
+                        let alfa = match (misturar, g.suave) {
+                            (true, true) => (u16::from(cobertura) * 3 / 2).min(255) as u8,
+                            _ => match cobertura >= 128 {
+                                true => 255,
+                                false => 0,
+                            },
+                        };
+                        if alfa == 0 {
+                            continue;
+                        }
+                        let (px, py) = (g.x + lx + 2, y + g.y + ly);
+                        if !(0..largura as i32).contains(&px) || !(0..altura as i32).contains(&py) {
+                            continue;
+                        }
+                        let pixel = &mut tela[py as usize * largura + px as usize];
+                        for canal in 0..3 {
+                            pixel[canal] = ((u32::from(pixel[canal]) * u32::from(255 - alfa)
+                                + u32::from(frente[canal]) * u32::from(alfa))
+                                / 255) as u8;
+                        }
+                    }
+                }
+            }
+        }
+        let mut saida = format!("P6\n{largura} {altura}\n255\n").into_bytes();
+        for pixel in &tela {
+            saida.extend_from_slice(pixel);
+        }
         std::fs::write(caminho, saida).unwrap();
     }
 }
