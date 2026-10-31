@@ -1933,6 +1933,17 @@ impl Session {
         self.machine.texto_vetorial()
     }
 
+    /// Descarta o texto que a tela já não mostra.
+    ///
+    /// **Quem compõe a camada chama isto uma vez por quadro**, antes de
+    /// [`Session::hash_dos_textos`] e de [`Session::pinta_camada_de_texto`]. A camada não escreve
+    /// pixels; o framebuffer é quem diz que o texto continua lá — ver
+    /// [`crate::machine::Machine::poda_textos`]. Sem esta chamada, texto de telas que já saíram
+    /// fica por cima do jogo: é o "texto que devia ter sumido".
+    pub fn atualiza_textos(&mut self) {
+        self.machine.poda_textos();
+    }
+
     /// Muda a cada alteração da camada de texto.
     pub fn versao_dos_textos(&self) -> u64 {
         self.machine.versao_dos_textos()
@@ -1941,6 +1952,14 @@ impl Session {
     /// O conteúdo da camada de texto, resumido num número.
     pub fn hash_dos_textos(&self) -> u64 {
         self.machine.hash_dos_textos()
+    }
+
+    /// Os textos que a camada vetorial está segurando agora.
+    ///
+    /// Serve à inspeção — o relatório de um jogo que desenha texto errado começa por saber
+    /// **qual** texto o motor achou que estava na tela.
+    pub fn textos_vetoriais(&self) -> &[crate::video::font::TextoDesenhado] {
+        self.machine.textos_vetoriais()
     }
 
     /// Rasteriza a camada de texto no tamanho final da tela, em RGBA não pré-multiplicado.

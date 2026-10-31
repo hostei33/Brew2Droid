@@ -150,6 +150,9 @@ impl Emulador {
         // console é esticado, a letra é desenhada de novo. Ligado desde o primeiro quadro para
         // não misturar texto de 11 px com texto nítido na mesma tela.
         sessao.define_texto_vetorial(texto_nitido());
+        // Antes de compor: o texto cuja área a tela já repintou não vale mais. Ver
+        // `Session::atualiza_textos`.
+        sessao.atualiza_textos();
         let parado = self.confirmando || self.pausado || self.audio_focus_paused || self.rewind.voltando();
 
         let suave = self.settings.graphics.smooth;

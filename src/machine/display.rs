@@ -1190,9 +1190,27 @@ impl<C: CpuBackend> Machine<C> {
         glifos: &[crate::video::font::Glyph],
     ) {
         let caixa = caixa_dos_glifos(glifos, x, y);
-        // Um texto redesenhado no mesmo lugar substitui o anterior: sem isso a lista cresceria a
-        // cada quadro num jogo que repinta a mesma frase.
-        self.textos_vetoriais.retain(|t| !sobrepoe(t.caixa, caixa));
+        // O mesmo texto, no mesmo lugar, na mesma cor, é um desenho só: um jogo que repinta o
+        // quadro inteiro a cada volta reanota tudo, e sem isto a lista cresceria sem fim.
+        //
+        // **Só o idêntico é substituído.** Antes, qualquer caixa que se cruzasse apagava a
+        // anterior — e dois rótulos vizinhos, um título sobre a própria sombra, um valor ao lado
+        // do nome do campo, se apagavam mutuamente. O que ficava na tela era um texto com
+        // buracos, que é o "texto embaralhado" de quem joga.
+        self.textos_vetoriais.retain(|t| {
+            !mesmo_desenho(t, texto, x, y, cor, self.clip)
+        });
+        // Teto de segurança: sem uma tela que se repinta, a lista só cresceria.
+        if self.textos_vetoriais.len() >= MAX_TEXTOS_VETORIAIS {
+            self.textos_vetoriais.remove(0);
+        }
+        let carimbo = match self.bitmaps.get_mut(&self.device_bitmap) {
+            Some(tela) => {
+                tela.liga_carimbos();
+                tela.carimbo_atual()
+            }
+            None => 0,
+        };
         self.textos_vetoriais.push(crate::video::font::TextoDesenhado {
             texto: texto.to_string(),
             x,
@@ -1200,8 +1218,35 @@ impl<C: CpuBackend> Machine<C> {
             cor,
             recorte: self.clip,
             caixa,
+            carimbo,
         });
         self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+    }
+
+    /// Descarta o texto que a tela já não mostra.
+    ///
+    /// **É o que separa uma camada de texto de uma lista de tudo o que já apareceu.** A camada não
+    /// escreve pixel nenhum; quem diz que o texto ainda vale é o framebuffer: se ninguém tocou nos
+    /// pixels da caixa desde a anotação, o texto continua sendo o que está ali. Um `Blt` de fundo,
+    /// um preenchimento, uma página trocada — todos carimbam os pixels que escrevem, e nenhum
+    /// deles precisa saber que a camada existe.
+    ///
+    /// Roda uma vez por quadro, e não a cada escrita: uma varredura de alguns milhares de pixels.
+    pub fn poda_textos(&mut self) {
+        if self.textos_vetoriais.is_empty() {
+            return;
+        }
+        let antes = self.textos_vetoriais.len();
+        let Some(tela) = self.bitmaps.get(&self.device_bitmap) else {
+            self.textos_vetoriais.clear();
+            self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+            return;
+        };
+        self.textos_vetoriais
+            .retain(|t| tela.intacta(t.caixa, t.carimbo));
+        if self.textos_vetoriais.len() != antes {
+            self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+        }
     }
 
     /// Tira da camada o que um preenchimento acabou de cobrir.
@@ -1239,6 +1284,13 @@ impl<C: CpuBackend> Machine<C> {
         // A lista velha não vale mais: com o modo trocado, os textos que estavam nela já estão
         // (ou vão estar) no framebuffer, e ficariam repetidos.
         self.textos_vetoriais.clear();
+        // O carimbo por pixel custa oito bytes por pixel da tela e só serve à camada de texto:
+        // desligada a camada, ele sai junto.
+        match (ativo, self.bitmaps.get_mut(&self.device_bitmap)) {
+            (true, Some(tela)) => tela.liga_carimbos(),
+            (false, Some(tela)) => tela.desliga_carimbos(),
+            _ => {}
+        }
         self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
     }
 
@@ -1353,6 +1405,24 @@ fn caixa_dos_glifos(glifos: &[crate::video::font::Glyph], x: i32, y: i32) -> Rec
     }
 }
 
+/// Se este é o mesmo desenho que já está anotado: mesmo texto, mesma posição, mesma cor, mesmo
+/// recorte.
+///
+/// **A comparação é exata de propósito.** Ela já foi por cruzamento de caixas, e o resultado era
+/// dois rótulos vizinhos se apagando — o título sobre a própria sombra, o valor ao lado do nome do
+/// campo. O que sobrava na tela era um texto com buracos, que é o "texto embaralhado" de quem joga.
+/// Quem decide o que já saiu da tela é o carimbo do framebuffer, não a geometria da anotação.
+fn mesmo_desenho(
+    t: &crate::video::font::TextoDesenhado,
+    texto: &str,
+    x: i32,
+    y: i32,
+    cor: Rgb,
+    recorte: Option<Rect>,
+) -> bool {
+    t.texto == texto && t.x == x && t.y == y && t.cor == cor && t.recorte == recorte
+}
+
 /// Se dois retângulos se cruzam. Bordas que só se encostam não contam.
 fn sobrepoe(a: Rect, b: Rect) -> bool {
     let (ax0, ay0) = (i32::from(a.x), i32::from(a.y));
@@ -1463,5 +1533,124 @@ mod testes_do_texto {
             posicao_do_texto((48, 272), rect, 0x8000, (90, 17)),
             (48, 272)
         );
+    }
+
+    /// **A regra que faz o texto sumir na hora certa.** A camada não escreve pixel; quem diz que
+    /// o texto ainda está na tela é o framebuffer. Escrita fora da caixa não conta, escrita dentro
+    /// conta — e é assim que um `Blt` de fundo apaga o texto anterior sem que o `Blt` saiba que
+    /// existe uma camada de texto.
+    #[test]
+    fn o_carimbo_diz_quando_o_texto_ainda_esta_na_tela() {
+        let mut tela = Framebuffer::new(120, 160);
+        tela.liga_carimbos();
+        let caixa = Rect {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 12,
+        };
+        let carimbo = tela.carimbo_atual();
+        assert!(tela.intacta(caixa, carimbo));
+
+        // Um sprite longe do texto não o apaga.
+        tela.fill_rect(
+            Rect {
+                x: 60,
+                y: 100,
+                width: 10,
+                height: 10,
+            },
+            Rgb::WHITE,
+        );
+        assert!(tela.intacta(caixa, carimbo));
+
+        // Um pixel dentro da caixa apaga: aquela área deixou de ser a do texto.
+        tela.fill_rect(
+            Rect {
+                x: 12,
+                y: 12,
+                width: 2,
+                height: 2,
+            },
+            Rgb::WHITE,
+        );
+        assert!(!tela.intacta(caixa, carimbo));
+    }
+
+    /// Uma caixa fora da tela não tem o que mostrar nem o que conservar.
+    #[test]
+    fn o_texto_que_nao_cabe_na_tela_e_descartado() {
+        let mut tela = Framebuffer::new(120, 160);
+        tela.liga_carimbos();
+        let fora = Rect {
+            x: 200,
+            y: 10,
+            width: 20,
+            height: 12,
+        };
+        assert!(!tela.intacta(fora, tela.carimbo_atual()));
+    }
+
+    /// Sem o registro por pixel não há como afirmar que o texto continua lá — e um texto que não
+    /// se pode afirmar é um texto que se apaga.
+    #[test]
+    fn sem_registro_o_texto_nao_e_afirmado() {
+        let tela = Framebuffer::new(10, 10);
+        let caixa = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert!(!tela.intacta(caixa, 0));
+    }
+
+    /// Recarregar a superfície inteira — o que um `IDisplay_Update` de um jogo que compõe fora da
+    /// tela faz — invalida tudo o que estava anotado.
+    #[test]
+    fn a_carga_de_uma_imagem_inteira_apaga_o_que_estava_anotado() {
+        let mut tela = Framebuffer::new(8, 8);
+        tela.liga_carimbos();
+        let caixa = Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        };
+        let carimbo = tela.carimbo_atual();
+        tela.load_rgb565_bytes(&vec![0xff; 8 * 8 * 2]);
+        assert!(!tela.intacta(caixa, carimbo));
+    }
+
+    /// O mesmo texto no mesmo lugar é um desenho só; o vizinho, mesmo encostando, não é.
+    #[test]
+    fn so_o_mesmo_desenho_substitui_o_anterior() {
+        let texto = crate::video::font::TextoDesenhado {
+            texto: "时间 02:54".to_string(),
+            x: 4,
+            y: 20,
+            cor: Rgb::BLACK,
+            recorte: None,
+            caixa: Rect {
+                x: 4,
+                y: 20,
+                width: 52,
+                height: 11,
+            },
+            carimbo: 0,
+        };
+        assert!(mesmo_desenho(
+            &texto,
+            "时间 02:54",
+            4,
+            20,
+            Rgb::BLACK,
+            None
+        ));
+        // Um caractere a mais, um pixel ao lado, outra cor: é outro desenho.
+        assert!(!mesmo_desenho(&texto, "时间 02:55", 4, 20, Rgb::BLACK, None));
+        assert!(!mesmo_desenho(&texto, "时间 02:54", 5, 20, Rgb::BLACK, None));
+        assert!(!mesmo_desenho(&texto, "时间 02:54", 4, 21, Rgb::BLACK, None));
+        assert!(!mesmo_desenho(&texto, "时间 02:54", 4, 20, Rgb::WHITE, None));
     }
 }

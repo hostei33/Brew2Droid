@@ -82,6 +82,15 @@ pub struct Framebuffer {
     sujo: Option<[u32; 4]>,
     /// Recorte temporário das primitivas: não altera o bitmap nem participa do save state.
     recorte: Option<[i32; 4]>,
+    /// Quando foi a última escrita de cada pixel, ou `None` quando não se pediu o registro.
+    ///
+    /// A camada de texto **não** escreve na superfície: ela guarda o texto e desenha de novo, no
+    /// tamanho da tela. Isso deixa uma pergunta sem resposta óbvia — até quando aquele texto ainda
+    /// vale? A resposta é o framebuffer: enquanto ninguém escreveu nos pixels que ele ocupava, ele
+    /// continua sendo o que está lá; quando alguém escreveu, o texto foi coberto e deve sumir. O
+    /// carimbo é o que permite responder isso sem conhecer nenhuma das operações de desenho —
+    /// vale para `FillRect`, para `Blt`, para uma página trocada e para o que ainda não existe.
+    carimbos: Option<Vec<u64>>,
 }
 
 /// De onde sai a [`Framebuffer::versao`] de cada superfície nova.
@@ -97,7 +106,64 @@ impl Framebuffer {
             serie: PROXIMA_SERIE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             sujo: None,
             recorte: None,
+            carimbos: None,
         }
+    }
+
+    /// Passa a registrar quando cada pixel foi escrito. Ver [`Framebuffer::carimbo_atual`].
+    ///
+    /// Só a tela precisa: são oito bytes por pixel, e um bitmap de trabalho nunca sustenta uma
+    /// camada de texto.
+    pub fn liga_carimbos(&mut self) {
+        let total = (self.width * self.height) as usize;
+        match &self.carimbos {
+            Some(carimbos) if carimbos.len() == total => {}
+            _ => self.carimbos = Some(vec![0; total]),
+        }
+    }
+
+    /// Para de registrar as escritas. Ver [`Framebuffer::liga_carimbos`].
+    pub fn desliga_carimbos(&mut self) {
+        self.carimbos = None;
+    }
+
+    /// Se o carimbo por pixel está ligado nesta superfície.
+    pub fn tem_carimbos(&self) -> bool {
+        self.carimbos.is_some()
+    }
+
+    /// O carimbo mais recente da superfície — o número a guardar com um texto.
+    ///
+    /// Um texto anotado agora continua válido enquanto **nenhum** pixel dele receber um carimbo
+    /// maior que este.
+    pub fn carimbo_atual(&self) -> u64 {
+        self.touched
+    }
+
+    /// Se nada foi escrito nos pixels de `rect` desde `carimbo`.
+    ///
+    /// Falso também quando o registro está desligado: sem ele não há como afirmar que o texto
+    /// ainda está lá, e um texto que não se pode afirmar é um texto que se apaga.
+    pub fn intacta(&self, rect: Rect, carimbo: u64) -> bool {
+        let Some(carimbos) = &self.carimbos else {
+            return false;
+        };
+        let x0 = i32::from(rect.x).max(0);
+        let y0 = i32::from(rect.y).max(0);
+        let x1 = (i32::from(rect.x) + i32::from(rect.width)).min(self.width as i32);
+        let y1 = (i32::from(rect.y) + i32::from(rect.height)).min(self.height as i32);
+        // Fora da tela não há o que mostrar: também não há o que conservar.
+        if x1 <= x0 || y1 <= y0 {
+            return false;
+        }
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if carimbos[(y as u32 * self.width + x as u32) as usize] > carimbo {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Um número que nenhuma outra superfície criada nesta execução tem.
@@ -144,6 +210,9 @@ impl Framebuffer {
         self.touched = touched;
         self.serie = serie;
         self.sujo = sujo;
+        // Os carimbos não voltam no arquivo, e o conteúdo mudou por baixo de qualquer texto
+        // anotado: sem registro, a camada de texto se descarta inteira em vez de mentir.
+        self.carimbos = None;
     }
 
     /// Os pixels de `inicio` até `fim` (índices de pixel, fim exclusivo), em bytes RGB565.
@@ -247,8 +316,13 @@ impl Framebuffer {
         if self.recorte.is_some_and(|[a,b,c,d]| x<a || y<b || x>=c || y>=d) {
             return;
         }
-        self.pixels[(y as u32 * self.width + x as u32) as usize] = value;
+        let indice = (y as u32 * self.width + x as u32) as usize;
+        self.pixels[indice] = value;
         self.touched += 1;
+        let carimbo = self.touched;
+        if let Some(carimbos) = &mut self.carimbos {
+            carimbos[indice] = carimbo;
+        }
         self.suja(x as u32, y as u32, x as u32 + 1, y as u32 + 1);
     }
 
@@ -257,8 +331,12 @@ impl Framebuffer {
         let [x0,y0,x1,y1] = self.limites_do_retangulo(rect);
         for y in y0..y1 {
             for x in x0..x1 {
-                self.pixels[(y as u32 * self.width + x as u32) as usize] = value;
+                let indice = (y as u32 * self.width + x as u32) as usize;
+                self.pixels[indice] = value;
                 self.touched += 1;
+                if let Some(carimbos) = &mut self.carimbos {
+                    carimbos[indice] = self.touched;
+                }
             }
         }
         if x0 < x1 && y0 < y1 {
@@ -438,6 +516,7 @@ impl Framebuffer {
                 self.touched += 1;
             }
         }
+        self.marca_superficie_inteira();
     }
 
     /// Recarrega uma superfície já convertida em palavras RGB565.
@@ -447,6 +526,18 @@ impl Framebuffer {
                 *pixel = value;
                 self.touched += 1;
             }
+        }
+        self.marca_superficie_inteira();
+    }
+
+    /// Carimba a superfície inteira com o instante da última escrita.
+    ///
+    /// É o que uma carga de imagem inteira significa para a camada de texto: nada do que estava
+    /// anotado sobreviveu. Vale barato porque só roda quando a superfície é recarregada de uma vez.
+    fn marca_superficie_inteira(&mut self) {
+        let carimbo = self.touched;
+        if let Some(carimbos) = &mut self.carimbos {
+            carimbos.fill(carimbo);
         }
     }
 

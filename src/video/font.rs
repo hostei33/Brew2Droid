@@ -547,6 +547,8 @@ pub struct TextoDesenhado {
     pub recorte: Option<Rect>,
     /// O que ele ocupa, para saber quando um preenchimento o apagou.
     pub caixa: Rect,
+    /// O carimbo da tela no instante em que ele foi anotado. Ver [`crate::video::display::Framebuffer::intacta`].
+    pub carimbo: u64,
 }
 
 /// Quanto o `PxScale` da reserva tem de crescer para ela ter o mesmo `em` da principal.
@@ -947,6 +949,7 @@ mod prova_visual {
                     width: 0,
                     height: 0,
                 },
+                carimbo: 0,
             })
             .collect();
         let (largura, altura, escala) = (1080u32, 1440u32, 9.0f32);

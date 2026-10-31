@@ -351,7 +351,12 @@ impl<C: CpuBackend> Machine<C> {
         }
         let addr = self.new_object(Interface::Bitmap)?;
         if addr != 0 {
-            let screen = std::mem::replace(&mut self.screen, Framebuffer::new(1, 1));
+            let mut screen = std::mem::replace(&mut self.screen, Framebuffer::new(1, 1));
+            // A tela é a única superfície que sustenta uma camada de texto, e o carimbo por
+            // pixel é o que diz até quando um texto anotado continua valendo.
+            if self.texto_vetorial {
+                screen.liga_carimbos();
+            }
             self.bitmaps.insert(addr, screen);
             self.device_bitmap = addr;
             self.display_target = addr;

@@ -1010,6 +1010,9 @@ const MAX_POLYGON_POINTS: usize = 4096;
 const MAX_FILE_NAME: usize = 64;
 /// Quantas linhas de texto desenhado o relatório guarda.
 const MAX_TEXTOS_DESENHADOS: usize = 64;
+/// Teto de textos na camada vetorial. Uma tela pequena cabe em muito menos; o teto existe para
+/// um jogo que nunca apaga a tela não crescer sem fim.
+const MAX_TEXTOS_VETORIAIS: usize = 512;
 /// Quantas chamadas de arquivo o relatório guarda. Um jogo de 6 s faz centenas de `Test`;
 /// o que interessa é o começo da execução, e é ele que a fila preserva.
 const MAX_FS_LOG: usize = 96;

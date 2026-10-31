@@ -67,10 +67,14 @@ colour, clip — and the Android frontend draws it again at the screen's own res
 stretched frame. Same font (the game's, with the CJK fallback), same layout, only a size that matches
 the display. A dialogue line that was a row of blocks becomes readable text.
 
-The list follows the framebuffer: a text enters when it is drawn, leaves when a fill covers its
-rectangle, and is cleared when the screen is cleared. Turning the layer off
-(`ZEEBX_TEXTO_NITIDO=0`) returns to text painted into the framebuffer, which is also what a
-screenshot or a headless run expects.
+The list follows the framebuffer, and it does so through the framebuffer itself: the screen keeps, per
+pixel, when it was last written. A text is annotated with the current stamp and stays until **any**
+pixel of its box is written again — by a `FillRect`, by a `Blt` of a background image, by a page swap.
+No drawing call needs to know the layer exists, which is what makes it survive games that erase with a
+sprite blit instead of a fill. The list is pruned once per frame; a text that two neighbours would
+have cancelled each other out was the bug that made menus look scrambled, and only an **identical**
+redraw replaces an entry now. Turning the layer off (`ZEEBX_TEXTO_NITIDO=0`) returns to text painted
+into the framebuffer, which is also what a screenshot or a headless run expects.
 
 Line breaking follows the script too: Chinese, Japanese and Korean have no spaces between words, so
 they break between characters, and closing punctuation never starts a line.
