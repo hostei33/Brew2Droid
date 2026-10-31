@@ -20,11 +20,20 @@
 //! latim continua saindo com as formas dele, e as métricas da linha também): só preenchem o que
 //! faltaria. Quem escolhe as reservas é o [`super::font_sistema`].
 //!
-//! São várias porque não existe uma fonte só para todas as escritas: a `Noto Sans CJK` desenha
-//! chinês, japonês, coreano, latim e cirílico, e não desenha um único caractere de árabe, hebraico,
-//! devanágari, tailandês ou birmanês — o Android tem uma `Noto` separada para cada uma. Elas são
-//! lidas **sob demanda**: guardar quinze alfabetos na memória para desenhar um menu em português
-//! custaria dezenas de megabytes, e a maioria dos jogos nunca vai precisar deles.
+//! São várias porque nenhuma cobre todos os ideogramas, e porque a do jogo pode cobrir menos
+//! ainda: `NotoSansSC` tem 30 mil glifos, `DroidSansFallback` bem menos, e o jogo pode trazer uma
+//! fonte que só tem latim. Elas são lidas **sob demanda**: guardar a `Noto Sans CJK` inteira na
+//! memória para desenhar um menu em português custaria 20 MB, e a maioria dos jogos nunca vai
+//! precisar dela.
+//!
+//! # O que este motor não faz
+//!
+//! Ele desenha **um caractere por vez**. Isso basta para chinês, japonês, coreano, latim, grego,
+//! cirílico e vietnamita, que não têm composição. Não basta para árabe (letras que se ligam e texto
+//! da direita para a esquerda), tailandês (vogal empilhada sobre a consoante) nem devanágari
+//! (consoantes conjuntas) — ali o glifo aparece e a palavra fica errada. Fazer isso direito pede um
+//! motor de *shaping* (HarfBuzz) e uma passada de bidi, que este port não tem; por isso o
+//! [`super::font_sistema`] só procura fontes CJK.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -46,45 +55,37 @@ struct Reserva {
 /// alfabeto errado.
 pub struct Candidata {
     caminho: PathBuf,
-    /// O que ela precisa saber desenhar. Serve para duas coisas: decidir se vale abrir (o texto
-    /// tem algum destes caracteres?) e recusar um arquivo de nome prometedor que não os desenhe.
-    ///
-    /// Vazia significa "qualquer escrita": é o caso do que o usuário põe na pasta de fontes, e
-    /// dela se exige apenas que desenhe algum dos caracteres que faltam.
-    sonda: &'static str,
     /// As faixas de código que ela atende.
     ///
-    /// Comparar pelo texto da sonda não serve: o tailandês de `ไทย` e o de `สวัสดี` não têm uma
-    /// letra em comum, e a fonte seria recusada justamente para o texto que ela desenha.
+    /// Vazia significa "qualquer escrita": é o caso do que o usuário põe na pasta de fontes ou
+    /// aponta em `ZEEBX_CJK_FONT`, e dela se exige apenas que desenhe algum dos caracteres que
+    /// faltam. Com faixas, a fonte precisa desenhar **todos** os caracteres de validação — senão um
+    /// `.ttf` de nome parecido toma o lugar de outro que serviria.
     faixas: &'static [(u32, u32)],
 }
 
+/// O que uma fonte tem de saber desenhar para ser aceita, e o texto usado como prova.
+///
+/// Dois ideogramas, e não um: um arquivo que só tem `中` (um recorte de subconjunto) desenharia a
+/// metade das frases. Dois é o mínimo que separa "fonte de chinês" de "fonte com um ideograma".
+const SONDA: [char; 2] = ['中', '文'];
+
 impl Candidata {
-    pub fn nova(caminho: PathBuf, sonda: &'static str, faixas: &'static [(u32, u32)]) -> Self {
-        Self {
-            caminho,
-            sonda,
-            faixas,
-        }
+    pub fn nova(caminho: PathBuf, faixas: &'static [(u32, u32)]) -> Self {
+        Self { caminho, faixas }
     }
 
-    /// Se esta é uma das que servem de fonte principal quando o jogo não trouxe nenhuma: só as
-    /// que têm sonda, isto é, as que sabemos validar.
-    pub fn e_cjk(&self) -> bool {
-        self.sonda.chars().any(e_ideograma)
-    }
-
-    /// Lê a fonte exigindo que ela cubra a própria sonda.
+    /// Lê a fonte exigindo que ela cubra a sonda.
     ///
     /// É o caminho de quem vira **principal** (o jogo não trouxe `.ttf`): aí não há "caracteres
-    /// que faltam" para servir de critério, e o critério é a sonda do grupo.
+    /// que faltam" para servir de critério, e o critério é desenhar chinês.
     pub fn abre(&self) -> Option<Font> {
-        self.carrega(&[])
+        self.carrega(&SONDA)
     }
 
     /// Se vale a pena abrir esta fonte para os caracteres que faltam.
     fn interessa(&self, faltando: &[char]) -> bool {
-        if self.sonda.is_empty() {
+        if self.faixas.is_empty() {
             return !faltando.is_empty();
         }
         faltando.iter().any(|c| self.atende(*c))
@@ -100,19 +101,19 @@ impl Candidata {
 
     /// Lê, escolhe a face e valida. `None` quando o arquivo não abre ou não desenha o que prometia.
     fn carrega(&self, faltando: &[char]) -> Option<Font> {
-        let exigidos: Vec<char> = match self.sonda.is_empty() {
+        let exigidos: Vec<char> = match self.faixas.is_empty() {
             true => faltando.to_vec(),
-            false => self.sonda.chars().collect(),
+            false => SONDA.to_vec(),
         };
         let bytes = std::fs::read(&self.caminho).ok()?;
         let indice = melhor_face(&bytes, &exigidos);
         let fonte = Font::load_index(bytes, indice, nome_do(&self.caminho))?;
         let desenha = |c: char| fonte.face.glyph_id(c).0 != 0;
-        let aceita = match self.sonda.is_empty() {
-            // Sem sonda basta cobrir parte do que falta: um arquivo pode ter só uma das escritas.
+        let aceita = match self.faixas.is_empty() {
+            // Sem faixas basta cobrir parte do que falta: um arquivo pode ter só alguns glifos.
             true => exigidos.iter().any(|c| desenha(*c)),
-            // Com sonda tem de cobrir ela inteira, senão um `.ttf` de nome parecido toma o lugar
-            // de outro que serviria.
+            // Com faixas tem de cobrir a sonda inteira, senão um `.ttf` de nome parecido toma o
+            // lugar de outro que serviria.
             false => exigidos.iter().all(|c| desenha(*c)),
         };
         if !aceita {
@@ -180,8 +181,7 @@ impl Font {
     /// Põe várias fontes atrás desta, na ordem dada.
     ///
     /// A ordem importa: a primeira que tiver o glifo ganha. Quem monta a lista é o
-    /// [`super::font_sistema`], e ele põe a `Noto Sans CJK` antes das outras porque é a que cobre
-    /// mais escritas de uma vez.
+    /// [`super::font_sistema`], e ele põe o que o usuário escolheu antes das do sistema.
     pub fn com_reservas(self, reservas: Vec<Font>) -> Self {
         {
             let mut minhas = self.reservas.borrow_mut();
@@ -558,8 +558,21 @@ mod tests {
         Font::load(std::fs::read(caminho).ok()?, nome_do(caminho.as_ref()))
     }
 
-    /// Uma fonte só de latim — sem árabe, sem ideograma. A DejaVu não serve para separar as
-    /// escritas: ela já traz árabe e hebraico, e o teste passaria sem a reserva.
+    /// O arquivo de fonte CJK desta máquina, para os testes que precisam de uma candidata que
+    /// ainda não foi lida.
+    fn caminho_cjk() -> Option<std::path::PathBuf> {
+        [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|caminho| caminho.exists())
+    }
+
+    /// Uma fonte só de latim, sem ideograma nenhum: a Liberation não traz CJK, e é isso que os
+    /// testes da reserva precisam.
     pub(super) fn fonte_latina() -> Option<Font> {
         da_maquina("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
     }
@@ -650,82 +663,48 @@ mod tests {
         assert_eq!(sozinha, com_reserva);
     }
 
-    /// Uma escrita por fonte: cada uma delas desenha o seu texto, e nenhuma delas desenha o das
-    /// outras. É o caso real — o Android tem uma `Noto` por escrita, não uma para todas.
+    /// Uma reserva que não desenha ideograma é pulada, e a seguinte assume.
+    ///
+    /// É o caso real: o usuário põe uma fonte na pasta e ela não é de chinês. Ela não pode
+    /// bloquear as do sistema que vêm atrás.
     #[test]
-    fn cada_escrita_sai_da_fonte_que_a_tem() {
-        const AMOSTRAS: &[(&str, &str)] = &[
-            (
-                "مرحبا",
-                "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-            ),
-            (
-                "שלום",
-                "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
-            ),
-            (
-                "नमस्ते",
-                "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-            ),
-            (
-                "สวัสดี",
-                "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-            ),
-        ];
-        let Some(principal) = fonte_latina() else {
+    fn a_reserva_sem_o_glifo_e_pulada() {
+        let (Some(principal), Some(cjk)) = (fonte_latina(), reserva()) else {
             return;
         };
-        let reservas: Vec<Font> = AMOSTRAS
-            .iter()
-            .filter_map(|(_, caminho)| da_maquina(caminho))
-            .collect();
-        if reservas.is_empty() {
+        let Some(sem_ideograma) = da_maquina("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+        else {
             return;
-        }
-        let fonte = principal.com_reservas(reservas);
-        let mut provadas = 0;
-        for (texto, _) in AMOSTRAS {
-            // A fonte daquela escrita pode não estar nesta máquina: só se cobra o que existe.
-            if !fonte.cobre(texto.chars().next().unwrap()) {
-                continue;
-            }
-            let glifos = fonte.layout(texto, 16.0);
-            assert!(!glifos.is_empty(), "{texto} não desenhou nada");
-            assert!(
-                glifos.iter().any(|g| g.coverage.iter().any(|&v| v > 0)),
-                "{texto} saiu em branco"
-            );
-            provadas += 1;
-        }
-        assert!(provadas > 0, "nenhuma escrita da amostra estava instalada");
+        };
+        assert!(!sem_ideograma.cobre('中'), "a DejaVu passou a ter CJK");
+        let fonte = principal.com_reservas(vec![sem_ideograma, cjk]);
+        assert!(fonte.cobre('中'));
+        assert_eq!(fonte.layout("中文", 16.0).len(), 2);
     }
 
     /// A reserva só é lida quando faz falta. Sem isso, abrir um jogo em português carregaria a
     /// `Noto Sans CJK` inteira — 20 MB — para não desenhar um ideograma sequer.
     #[test]
     fn a_candidata_so_e_lida_quando_falta_caractere() {
-        const CAMINHO: &str = "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf";
-        let (Some(principal), true) = (fonte_latina(), std::path::Path::new(CAMINHO).exists())
-        else {
+        let (Some(principal), Some(caminho)) = (fonte_latina(), caminho_cjk()) else {
             return;
         };
         let fonte = principal.com_candidatas(vec![Candidata::nova(
-            CAMINHO.into(),
-            "ไทย",
-            &[(0x0E00, 0x0E7F)],
+            caminho,
+            &[(0x4E00, 0x9FFF)],
         )]);
         // Texto que a principal dá conta: nada é lido.
         assert!(!fonte.layout("Jogar", 16.0).is_empty());
         assert!(!fonte.tem_reserva());
 
         // Texto que ela não tem: a candidata é lida e passa a desenhar.
-        assert!(!fonte.cobre('ก'));
-        assert!(!fonte.layout("สวัสดี", 16.0).is_empty());
+        assert!(!fonte.cobre('中'));
+        assert!(!fonte.layout("中文", 16.0).is_empty());
         assert!(fonte.tem_reserva());
-        assert!(fonte.cobre('ก'));
+        assert!(fonte.cobre('中'));
         // E uma vez lida, não é lida de novo.
         let quantas = fonte.fontes_de_reserva().len();
-        let _ = fonte.layout("สวัสดี", 16.0);
+        let _ = fonte.layout("中文", 16.0);
         assert_eq!(fonte.fontes_de_reserva().len(), quantas);
     }
 
@@ -741,11 +720,8 @@ mod tests {
             return;
         }
         // A sonda pede ideograma; a DejaVu não tem nenhum.
-        let fonte = principal.com_candidatas(vec![Candidata::nova(
-            caminho.into(),
-            "中文",
-            &[(0x4E00, 0x9FFF)],
-        )]);
+        let fonte =
+            principal.com_candidatas(vec![Candidata::nova(caminho.into(), &[(0x4E00, 0x9FFF)])]);
         assert!(fonte.layout("中文", 16.0).is_empty());
         assert!(!fonte.tem_reserva());
     }
@@ -759,11 +735,11 @@ mod prova_visual {
     /// Despeja um PGM do texto desenhado como o `display.rs` desenha, para olhar o resultado.
     /// Roda só a pedido: `cargo test -- --ignored prova_visual`.
     ///
-    /// Sai um par de imagens: a do jogo sozinha (o que se via antes da reserva) e a com as
-    /// reservas.
+    /// Sai um par de imagens: a do jogo sozinha (o que se via antes da reserva) e a com a
+    /// reserva.
     #[test]
     #[ignore]
-    fn desenha_um_paragrafo_em_varias_escritas() {
+    fn desenha_um_paragrafo_em_chines() {
         let (Some(base), Some(outra), Some(reserva)) = (
             tests::fonte_latina(),
             tests::fonte_latina(),
@@ -771,37 +747,24 @@ mod prova_visual {
         ) else {
             return;
         };
-        let mut com_reserva = outra.com_reserva(reserva);
-        for caminho in [
-            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        ] {
-            if let Ok(bytes) = std::fs::read(caminho) {
-                if let Some(fonte) = Font::load(bytes, caminho.into()) {
-                    com_reserva = com_reserva.com_reserva(fonte);
-                }
-            }
-        }
+        let com_reserva = outra.com_reserva(reserva);
         let linhas = [
             "中文测试：你好，世界",
             "Press A B C 123",
-            "مرحبا بالعالم",
-            "שלום עולם",
-            "สวัสดีชาวโลก",
-            "नमस्ते दुनिया",
+            "这是一句比较长的中文，用来检查断行和字距。",
+            "日本語のテスト",
+            "한국어 테스트",
         ];
         despeja("/tmp/cjk_antes.pgm", &base, &linhas);
         despeja("/tmp/cjk_depois.pgm", &com_reserva, &linhas);
         println!("escrito /tmp/cjk_antes.pgm e /tmp/cjk_depois.pgm");
     }
 
-    /// Os textos que não precisam de *shaping*: um glifo por caractere basta e o resultado é o
-    /// correto. É a maior parte do que um jogo traduzido pode trazer.
+    /// O que a `Noto Sans CJK` cobre além do chinês: kana, hangul, cirílico e grego saem certos
+    /// com um glifo por caractere, sem *shaping*.
     #[test]
     #[ignore]
-    fn desenha_o_que_nao_precisa_de_shaping() {
+    fn desenha_o_que_a_noto_cjk_cobre() {
         let (Some(outra), Some(reserva)) = (tests::fonte_latina(), tests::reserva()) else {
             return;
         };

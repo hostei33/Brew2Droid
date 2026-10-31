@@ -21,27 +21,27 @@ The project is under active development. Compatibility and performance vary betw
 - Per-game resolution, orientation, scaling, and control profiles.
 - Hardware-accelerated graphics.
 - Sound and volume settings.
-- Text in any script: the game keeps its own font, and the characters it lacks come from the system
-  font of that script (Noto Sans CJK, Arabic, Thai, … on Android), read on demand. Chinese, Japanese,
-  Korean, Cyrillic, Greek and Vietnamese render correctly; Arabic, Thai and Devanagari get glyphs but
-  not shaping (see [Fonts](#fonts)).
+- Chinese text: the game keeps its own font, and the characters it lacks come from the system CJK
+  font (Noto Sans CJK on Android), read on demand. Japanese and Korean work the same way, and so do
+  Cyrillic, Greek and Vietnamese (see [Fonts](#fonts)).
 
 ### Fonts
 
 A game draws text with the `.ttf` it ships. A translation replaces the strings and not the font, and
-a font like the 191 KB `tectoy.ttf` has no ideograph at all. When the game's font does not draw a
-character, the emulator looks for a fallback, in this order:
+a font like the 191 KB `tectoy.ttf` has no ideograph at all — every character of a Chinese
+translation came out blank, leaving only digits and punctuation. When the game's font does not draw
+a character, the emulator looks for a CJK fallback, in this order:
 
 1. `ZEEBX_CJK_FONT` — a path, for pinning one specific font;
 2. `<device root>/shared/fonts/` — drop a `.ttf`/`.otf`/`.ttc` there to use it;
-3. the system fonts, by script — `/system/fonts` and `/product/fonts` on Android (`Noto Sans CJK`,
-   `Droid Sans Fallback`, `Noto Sans Arabic`, `Noto Sans Thai`, …), `/usr/share/fonts` on a PC;
+3. the Android system fonts — `/system/fonts` and `/product/fonts` (`Noto Sans CJK`,
+   `Noto Sans SC`, `Droid Sans Fallback`);
 4. the desktop fonts, when running on a PC.
 
-There is no single font for every script: `Noto Sans CJK` draws Latin, Greek, Cyrillic, Chinese,
-Japanese and Korean, and not one Arabic, Hebrew, Devanagari, Thai, Lao, Myanmar or Khmer character.
-The emulator keeps one fallback per script and reads each **only when a character needs it** —
-loading fifteen alphabets to draw a Portuguese menu would cost tens of megabytes.
+Several candidates are kept because none covers every ideograph: `Noto Sans SC` has about 30 000
+glyphs, `Droid Sans Fallback` far fewer, and the game may ship a font with no CJK at all. Each is
+read **only when a character needs it** — loading the 20 MB CJK font to draw a Portuguese menu would
+be wasted memory.
 
 The fallback is only consulted for characters the game's font does not have, and it is scaled to the
 same `em`, so the Latin text keeps the look and the line height the game was designed around. If the
@@ -49,16 +49,16 @@ game ships no font at all, the system font becomes the main one. `.ttc` collecti
 face that draws the text — the Simplified Chinese one for a Chinese string, the Japanese one is never
 picked by accident.
 
-Line breaking follows the script too: Chinese, Japanese, Korean, Thai, Lao, Tibetan, Myanmar and Khmer
-have no spaces between words, so they break between characters, and closing punctuation never starts
-a line.
+Line breaking follows the script too: Chinese, Japanese and Korean have no spaces between words, so
+they break between characters, and closing punctuation never starts a line.
 
-**Limitation.** The text is laid out character by character, so scripts that need shaping are drawn
-with unjoined, unpositioned glyphs: Arabic and Hebrew are not reordered right-to-left, Arabic letters
-do not join, Thai vowels do not stack above or below the consonant, and Devanagari conjuncts do not
-form. The glyphs appear (no more blank boxes), but the typography is wrong. Fixing that needs a
-shaping engine (HarfBuzz) and a bidi pass, which this port does not have yet. Latin, Greek, Cyrillic,
-Vietnamese, CJK and Hangul need neither, and are correct.
+**Scope.** Only CJK is wired up, on purpose. Arabic, Hebrew, Devanagari, Thai and Khmer fonts are
+installed on Android and would be easy to add, but this engine draws one character at a time: Arabic
+letters would not join and would read left to right, Thai vowels would not stack, Devanagari
+conjuncts would not form. The glyphs would appear and the words would be wrong — which looks like a
+game bug. Doing it properly needs a shaping engine (HarfBuzz) and a bidi pass, which this port does
+not have yet. Latin, Greek, Cyrillic, Vietnamese and CJK need neither shaping nor bidi, and are
+correct.
 
 ## Screenshots
 

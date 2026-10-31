@@ -2122,15 +2122,7 @@ fn unidades(paragrafo: &str) -> Vec<(bool, String)> {
             }
             continue;
         }
-        // Um sinal que se apoia na letra anterior não pode abrir linha: no tailandês, no laosiano,
-        // no birmanês e no khmer a vogal e o tom ficam pendurados na consoante.
-        if marcador(c) {
-            if let Some((_, ultima)) = saida.last_mut() {
-                ultima.push(c);
-                continue;
-            }
-        }
-        if e_sem_espaco(c) {
+        if e_cjk(c) {
             fecha(&mut saida, &mut palavra, &mut espaco);
             if e_fecho(c) {
                 if let Some((_, ultima)) = saida.last_mut() {
@@ -2170,35 +2162,6 @@ fn e_cjk(c: char) -> bool {
         0xFF00..=0xFF60 |   // formas de largura cheia
         0xFFE0..=0xFFE6 |
         0x20000..=0x2FA1F
-    )
-}
-
-/// As escritas que não separam palavra por espaço.
-///
-/// O tailandês, o laosiano, o birmanês e o khmer escrevem tudo grudado, como o chinês: sem
-/// tratar cada letra como um ponto de quebra, o parágrafo inteiro vira uma "palavra" só e o fim
-/// do texto desaparece no recorte do controle.
-fn e_sem_espaco(c: char) -> bool {
-    e_cjk(c)
-        || matches!(c as u32,
-            0x0E00..=0x0E7F |   // tailandês
-            0x0E80..=0x0EFF |   // laosiano
-            0x0F00..=0x0FFF |   // tibetano
-            0x1000..=0x109F |   // birmanês
-            0x1780..=0x17FF     // khmer
-        )
-}
-
-/// Os sinais que se penduram na letra anterior e não podem começar linha.
-fn marcador(c: char) -> bool {
-    matches!(c as u32,
-        0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E |        // tailandês: vogal e tom
-        0x0EB1 | 0x0EB4..=0x0EBC | 0x0EC8..=0x0ECD |        // laosiano
-        0x0F71..=0x0F84 | 0x0F86..=0x0F87 |                 // tibetano
-        0x102B..=0x103E | 0x1056..=0x1059 | 0x105E..=0x1060 |
-        0x1062..=0x1064 | 0x1067..=0x106D | 0x1071..=0x1074 |
-        0x1082..=0x108D | 0x108F | 0x109A..=0x109D |        // birmanês
-        0x17B6..=0x17D3 | 0x17DD                            // khmer
     )
 }
 
@@ -2275,23 +2238,6 @@ mod testes_do_html {
     fn a_pontuacao_anda_com_o_ideograma_anterior() {
         let mede = |t: &str| t.chars().count() as u32;
         assert_eq!(quebra_linhas("你好，世界", 3, mede), ["你好，", "世界"]);
-    }
-
-    /// O tailandês também não tem espaço: quebra entre letras, não no fim do parágrafo.
-    #[test]
-    fn o_tailandes_quebra_entre_letras() {
-        let mede = |t: &str| t.chars().count() as u32;
-        // A régua aqui conta unidades de código, não largura: o que se prova é que a quebra
-        // acontece entre letras, e que o `ั` de `สวัส` não ficou sozinho na linha seguinte.
-        assert_eq!(quebra_linhas("สวัสดีชาวโลก", 4, mede), ["สวัส", "ดีชา", "วโลก"]);
-    }
-
-    /// A vogal e o tom tailandeses ficam na letra anterior, nunca sozinhos no começo da linha.
-    #[test]
-    fn o_sinal_tailandes_anda_com_a_letra() {
-        let mede = |t: &str| t.chars().count() as u32;
-        // "กิ" são duas unidades de código mas uma letra com a vogal em cima.
-        assert_eq!(quebra_linhas("กิกิ", 1, mede), ["กิ", "กิ"]);
     }
 
     /// Texto misturado: as palavras latinas continuam inteiras e com o espaço que tinham.

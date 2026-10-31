@@ -6,10 +6,19 @@
 //! existe no aparelho: no Android é a **Noto Sans CJK**, a mesma que o sistema usa para desenhar
 //! o texto do próprio Android.
 //!
-//! O mesmo vale para as outras escritas, e é por isso que a procura é por **grupo**, não por uma
-//! fonte só: a `Noto Sans CJK` desenha latim, cirílico, grego, hanzi, kana e hangul, e não desenha
-//! um único caractere de árabe, hebraico, devanágari, tailandês, birmanês ou khmer. O Android tem
-//! uma `Noto` separada para cada uma delas, e é essa que se procura quando o texto pede.
+//! # O escopo: chinês
+//!
+//! Esta lista cobre **chinês** (e, de lambuja, japonês e coreano: a mesma `Noto Sans CJK` desenha
+//! hanzi, kana e hangul, e um jogo japonês funciona sem nenhuma linha a mais).
+//!
+//! As outras escritas — árabe, hebraico, devanágari, tailandês, birmanês, khmer — ficam de fora de
+//! propósito. Não por falta de fonte: o Android tem uma `Noto` para cada uma, e a procura abaixo
+//! aceitaria qualquer uma delas. É por causa da **composição**: um caractere por vez, como este
+//! motor desenha, não liga as letras do árabe (elas saem soltas, na ordem errada, sem o
+//! `right-to-left`), não empilha a vogal tailandesa sobre a consoante, e não forma as consoantes
+//! conjuntas do devanágari. O glifo aparece e a palavra fica errada — pior do que não aparecer,
+//! porque parece um defeito do jogo. Para valer, precisa de *shaping* (HarfBuzz) e de uma passada
+//! de bidi, que este port não tem. Ver a nota em [`super::font`].
 //!
 //! A ordem de procura é deliberada:
 //!
@@ -26,15 +35,15 @@ use std::path::{Path, PathBuf};
 
 use super::font::{Candidata, Font};
 
-/// Um grupo de escrita: o texto que o identifica e por onde procurá-lo.
+/// De onde vêm as candidatas de uma escrita: por quais nomes procurar e o que a fonte precisa
+/// desenhar para ser aceita.
 struct Grupo {
-    /// O que a fonte precisa saber desenhar. Serve para decidir se vale abrir o arquivo e para
-    /// recusar um `.ttf` de nome prometedor que não cubra o grupo.
-    sonda: &'static str,
-    /// As faixas de código da escrita, que decidem se um texto precisa deste grupo.
+    /// As faixas de código da escrita, que decidem se um texto precisa deste grupo e se a fonte
+    /// encontrada serve.
     ///
-    /// Não dá para usar a sonda para isso: `ไทย` e `สวัสดี` são tailandês e não têm uma letra em
-    /// comum — comparar texto recusaria a fonte exatamente para o texto que ela desenha.
+    /// A faixa, e não o texto da sonda, é o critério: um jogo em chinês pode trazer só `你` e
+    /// `好`, e comparar com a sonda `中文` recusaria a fonte exatamente para o texto que ela
+    /// desenha.
     faixas: &'static [(u32, u32)],
     /// Pedaços de nome de arquivo, em minúsculas, que costumam trazer esta escrita.
     pistas: &'static [&'static str],
@@ -42,13 +51,11 @@ struct Grupo {
     fixos: &'static [&'static str],
 }
 
-/// As escritas que o Android traz e um jogo pode acabar usando.
-///
-/// A ordem importa: a CJK vem primeiro porque é a que cobre mais de uma escrita de uma vez (latim,
-/// grego, cirílico, hanzi, kana, hangul), então ela resolve a maioria dos casos com uma leitura só.
+/// As escritas que este port atende. Hoje uma só — a CJK, que cobre chinês, japonês e coreano com
+/// o mesmo arquivo. A tabela fica assim, de uma linha, porque acrescentar uma escrita é acrescentar
+/// uma entrada; o resto do código não muda.
 const GRUPOS: &[Grupo] = &[
     Grupo {
-        sonda: "中文",
         faixas: &[
             (0x2E80, 0x9FFF),
             (0xAC00, 0xD7AF),
@@ -99,184 +106,6 @@ const GRUPOS: &[Grupo] = &[
             "C:\\Windows\\Fonts\\simsun.ttc",
         ],
     },
-    Grupo {
-        sonda: "مرحبا",
-        faixas: &[
-            (0x0600, 0x06FF),
-            (0x0750, 0x077F),
-            (0x08A0, 0x08FF),
-            (0xFB50, 0xFDFF),
-            (0xFE70, 0xFEFF),
-        ],
-        pistas: &["arabic", "naskh", "kufi", "urdu"],
-        fixos: &[
-            "/system/fonts/NotoNaskhArabic-Regular.ttf",
-            "/system/fonts/NotoSansArabic-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "שלום",
-        faixas: &[(0x0590, 0x05FF), (0xFB1D, 0xFB4F)],
-        pistas: &["hebrew"],
-        fixos: &[
-            "/system/fonts/NotoSansHebrew-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "नमस्ते",
-        faixas: &[(0x0900, 0x097F), (0xA8E0, 0xA8FF)],
-        pistas: &["devanagari"],
-        fixos: &[
-            "/system/fonts/NotoSansDevanagari-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "বাংলা",
-        faixas: &[(0x0980, 0x09FF)],
-        pistas: &["bengali"],
-        fixos: &[
-            "/system/fonts/NotoSansBengali-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "தமிழ்",
-        faixas: &[(0x0B80, 0x0BFF)],
-        pistas: &["tamil"],
-        fixos: &[
-            "/system/fonts/NotoSansTamil-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "తెలుగు",
-        faixas: &[(0x0C00, 0x0C7F)],
-        pistas: &["telugu"],
-        fixos: &[
-            "/system/fonts/NotoSansTelugu-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ಕನ್ನಡ",
-        faixas: &[(0x0C80, 0x0CFF)],
-        pistas: &["kannada"],
-        fixos: &[
-            "/system/fonts/NotoSansKannada-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "മലയാളം",
-        faixas: &[(0x0D00, 0x0D7F)],
-        pistas: &["malayalam"],
-        fixos: &[
-            "/system/fonts/NotoSansMalayalam-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ગુજરાતી",
-        faixas: &[(0x0A80, 0x0AFF)],
-        pistas: &["gujarati"],
-        fixos: &[
-            "/system/fonts/NotoSansGujarati-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGujarati-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ਪੰਜਾਬੀ",
-        faixas: &[(0x0A00, 0x0A7F)],
-        pistas: &["gurmukhi"],
-        fixos: &[
-            "/system/fonts/NotoSansGurmukhi-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGurmukhi-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ଓଡ଼ିଆ",
-        faixas: &[(0x0B00, 0x0B7F)],
-        pistas: &["oriya", "odia"],
-        fixos: &[
-            "/system/fonts/NotoSansOriya-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansOriya-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "සිංහල",
-        faixas: &[(0x0D80, 0x0DFF)],
-        pistas: &["sinhala"],
-        fixos: &[
-            "/system/fonts/NotoSansSinhala-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansSinhala-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ไทย",
-        faixas: &[(0x0E00, 0x0E7F)],
-        pistas: &["thai"],
-        fixos: &[
-            "/system/fonts/NotoSansThai-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ລາວ",
-        faixas: &[(0x0E80, 0x0EFF)],
-        pistas: &["lao"],
-        fixos: &[
-            "/system/fonts/NotoSansLao-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "မြန်မာ",
-        faixas: &[(0x1000, 0x109F), (0xAA60, 0xAA7F)],
-        pistas: &["myanmar"],
-        fixos: &[
-            "/system/fonts/NotoSansMyanmar-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ខ្មែរ",
-        faixas: &[(0x1780, 0x17FF), (0x19E0, 0x19FF)],
-        pistas: &["khmer"],
-        fixos: &[
-            "/system/fonts/NotoSansKhmer-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "አማርኛ",
-        faixas: &[(0x1200, 0x137F), (0x1380, 0x139F), (0x2D80, 0x2DDF)],
-        pistas: &["ethiopic"],
-        fixos: &[
-            "/system/fonts/NotoSansEthiopic-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansEthiopic-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "հայերեն",
-        faixas: &[(0x0530, 0x058F), (0xFB13, 0xFB17)],
-        pistas: &["armenian"],
-        fixos: &[
-            "/system/fonts/NotoSansArmenian-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansArmenian-Regular.ttf",
-        ],
-    },
-    Grupo {
-        sonda: "ქართული",
-        faixas: &[(0x10A0, 0x10FF), (0x1C90, 0x1CBF), (0x2D00, 0x2D2F)],
-        pistas: &["georgian"],
-        fixos: &[
-            "/system/fonts/NotoSansGeorgian-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
-        ],
-    },
 ];
 
 /// As pastas onde procurar pelo nome, quando os caminhos fixos não deram.
@@ -299,20 +128,21 @@ pub fn abre(aparelho: &Path) -> Option<Font> {
     abre_com_resto(aparelho).map(|(fonte, _)| fonte)
 }
 
-/// A fonte principal, e o que sobrou de candidatas para as outras escritas.
+/// A fonte principal, e o que sobrou de candidatas para quando ela também falhar.
 ///
-/// Sem o resto, um jogo que não trouxe `.ttf` desenharia chinês e nada mais: a `Noto Sans CJK`
-/// cobre o chinês e não cobre árabe, tailandês nem devanágari.
+/// O "resto" existe porque nenhuma fonte cobre todos os ideogramas: a `Noto Sans SC` tem 30 mil
+/// glifos e a `Droid Sans Fallback`, bem menos. Se a primeira que abriu não desenhar um caractere
+/// raro, a próxima da fila tenta.
 fn abre_com_resto(aparelho: &Path) -> Option<(Font, Vec<Candidata>)> {
     let mut lista = candidatas(aparelho);
-    loop {
-        let posicao = lista.iter().position(Candidata::e_cjk)?;
-        let candidata = lista.remove(posicao);
-        // Não abriu: a próxima que sirva para CJK pode abrir.
+    while !lista.is_empty() {
+        let candidata = lista.remove(0);
+        // Não abriu (ou não desenha chinês): a próxima da fila pode abrir.
         if let Some(fonte) = candidata.abre() {
             return Some((fonte, lista));
         }
     }
+    None
 }
 
 /// Junta a fonte do jogo com as reservas do sistema, quando fazem falta uma à outra.
@@ -335,34 +165,30 @@ pub fn com_reserva(do_jogo: Option<Font>, aparelho: &Path) -> Option<Font> {
 fn candidatas(aparelho: &Path) -> Vec<Candidata> {
     let mut saida = Vec::new();
 
-    // O que o usuário pôs vem primeiro e vale para qualquer escrita: não leva sonda, e a validação
-    // é "desenha algum dos caracteres que faltam".
+    // O que o usuário pôs vem primeiro: não leva faixas, e a validação é "desenha algum dos
+    // caracteres que faltam".
     if let Some(caminho) = std::env::var_os("ZEEBX_CJK_FONT") {
-        saida.push(Candidata::nova(PathBuf::from(caminho), "", &[]));
+        saida.push(Candidata::nova(PathBuf::from(caminho), &[]));
     }
     // A pasta do aparelho vem antes do sistema: é onde o usuário põe a fonte que quer ver.
     for caminho in fontes_da_pasta(&aparelho.join("shared").join("fonts")) {
-        saida.push(Candidata::nova(caminho, "", &[]));
+        saida.push(Candidata::nova(caminho, &[]));
     }
 
     for grupo in GRUPOS {
         for caminho in grupo.fixos {
-            saida.push(Candidata::nova(
-                PathBuf::from(caminho),
-                grupo.sonda,
-                grupo.faixas,
-            ));
+            saida.push(Candidata::nova(PathBuf::from(caminho), grupo.faixas));
         }
         for pasta in PASTAS {
             for caminho in fontes_do_sistema(pasta, grupo.pistas) {
-                saida.push(Candidata::nova(caminho, grupo.sonda, grupo.faixas));
+                saida.push(Candidata::nova(caminho, grupo.faixas));
             }
         }
     }
 
     if let Some(base) = std::env::var_os("HOME") {
         for caminho in fontes_da_pasta(&Path::new(&base).join(".local/share/fonts")) {
-            saida.push(Candidata::nova(caminho, "", &[]));
+            saida.push(Candidata::nova(caminho, &[]));
         }
     }
     saida
@@ -446,14 +272,14 @@ mod tests {
         assert!(!fonte.layout("中文", 16.0).is_empty());
     }
 
-    /// Nenhuma das sondas pode ser vazia, e cada uma tem de ser coberta por uma fonte que os
-    /// nomes de arquivo daquele grupo possam trazer. Erro de digitação numa sonda faz o grupo
-    /// inteiro parar de funcionar sem aviso.
+    /// Todo grupo tem faixas e pistas. Um erro de digitação numa faixa faz o grupo inteiro parar
+    /// de funcionar sem aviso; sem pistas, a varredura por nome não acha nada.
     #[test]
-    fn as_sondas_sao_plausiveis() {
+    fn os_grupos_tem_faixas_e_pistas() {
         for grupo in GRUPOS {
-            assert!(!grupo.sonda.is_empty());
-            assert!(!grupo.pistas.is_empty(), "{}", grupo.sonda);
+            assert!(!grupo.faixas.is_empty());
+            assert!(!grupo.pistas.is_empty());
+            assert!(!grupo.fixos.is_empty());
         }
     }
 
