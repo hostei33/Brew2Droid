@@ -116,9 +116,5 @@ pub fn decode(bytes: &[u8]) -> Result<Sound, String> {
     if packet_count.is_some_and(|count| count != 0 && count != samples.len() / 160) {
         return Err("contagem QCP não corresponde aos pacotes".into());
     }
-    Ok(Sound {
-        rate: 8000,
-        channels: 1,
-        samples,
-    })
+    Ok(Sound::novo(8000, 1, samples))
 }

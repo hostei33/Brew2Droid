@@ -167,11 +167,7 @@ fn decode_wave(bytes: &[u8]) -> Result<Sound, String> {
                 if segment_samples.saturating_add(saved.samples.len()) > MAX_FRAMES * 4 {
                     return Err("CMF excede orçamento de PCM e mistura".into());
                 }
-                Sound {
-                    rate: saved.rate,
-                    channels: 1,
-                    samples: saved.samples.clone(),
-                }
+                Sound::novo(saved.rate, 1, saved.samples.clone())
             } else {
                 let sound = if codec == 4 {
                     if !continued {
@@ -180,11 +176,7 @@ fn decode_wave(bytes: &[u8]) -> Result<Sound, String> {
                     let decoder = decoders
                         .get_mut(&key)
                         .ok_or("continuação QCELP sem início")?;
-                    Sound {
-                        rate: RATE,
-                        channels: 1,
-                        samples: decoder.decode(&packet[7..])?,
-                    }
+                    Sound::novo(RATE, 1, decoder.decode(&packet[7..])?)
                 } else {
                     let info = be16(packet, 7)?;
                     let rate = [8000, 16000, 32000]
@@ -195,11 +187,7 @@ fn decode_wave(bytes: &[u8]) -> Result<Sound, String> {
                     if block < 4 || (packet.len() - 9) % block != 0 {
                         return Err("bloco IMA CMF truncado".into());
                     }
-                    Sound {
-                        rate,
-                        channels: 1,
-                        samples: decode_ima_adpcm(&packet[9..], 1, block),
-                    }
+                    Sound::novo(rate, 1, decode_ima_adpcm(&packet[9..], 1, block))
                 };
                 let old = cache.get(&key).map_or(0, |s| s.samples.len());
                 cache_frames = cache_frames.saturating_sub(old);
@@ -329,9 +317,5 @@ fn decode_wave(bytes: &[u8]) -> Result<Sound, String> {
     for sample in &mut samples {
         *sample = sample.clamp(-1.0, 1.0);
     }
-    Ok(Sound {
-        rate: RATE,
-        channels: 2,
-        samples,
-    })
+    Ok(Sound::novo(RATE, 2, samples))
 }

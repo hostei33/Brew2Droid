@@ -391,7 +391,7 @@ impl<C: CpuBackend> Machine<C> {
             if seed {
                 // Converter o seed exige um alvo separado no overlay. Sem perfil de saves,
                 // ReadWrite pode devolver o próprio pacote; nem bCreate autoriza truncá-lo.
-                if source == &target && !self.vfs.is_overlay_path(&target) {
+                if source == &target && !self.vfs.is_writable_path(&target) {
                     return Err("seed nativo precisa de overlay gravável".into());
                 }
                 // O índice do único formato nativo reconhecido também deve estar vazio.

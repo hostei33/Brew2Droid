@@ -59,6 +59,7 @@ use android_activity::{AndroidApp, MainEvent, PollEvent, WindowManagerFlags};
 use zeebx::input::Pad;
 use zeebx::session::Session;
 use zeebx::storage::StoragePaths;
+use zeebx::ui::estados;
 use zeebx::ui::i18n::Catalog;
 use zeebx::ui::library::{self, Game};
 use zeebx::ui::settings::{ModoDosControlesNaTela, Settings};
@@ -639,7 +640,7 @@ pub struct Emulador {
     /// De onde o jogo aberto veio: é o que o "Reiniciar" da caixa do voltar abre de novo.
     caminho_aberto: Option<std::path::PathBuf>,
     /// Os cinco slots persistentes do jogo atual.
-    estados: [Option<estado::Slot>; estado::SLOTS],
+    estados: [Option<estados::Slot>; estados::SLOTS],
     /// Miniaturas já convertidas/subidas ao egui, por slot.
     miniaturas_estado: HashMap<usize, egui::TextureHandle>,
     /// Slot ocupado que pediu uma segunda confirmação antes de ser substituído.
@@ -1012,7 +1013,7 @@ impl Emulador {
                 self.estados = self
                     .estado_id
                     .as_deref()
-                    .map(|id| estado::lista(&self.estados_raiz, id))
+                    .map(|id| estados::lista(&self.estados_raiz, id))
                     .unwrap_or_else(|| std::array::from_fn(|_| None));
                 self.miniaturas_estado.clear();
                 self.estado_sobrescrever = None;

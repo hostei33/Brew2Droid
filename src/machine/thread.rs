@@ -57,8 +57,8 @@ impl<C: CpuBackend> Machine<C> {
                             self.cpu.write_u32(cb + 16, 0)?;
                             self.cpu.write_u32(cb + 20, 0)?;
                         }
-                        self.heap.free(cb);
-                        self.heap.free(state.stack);
+                        self.libera(cb);
+                        self.libera(state.stack);
                     }
                 }
                 remaining
@@ -71,7 +71,7 @@ impl<C: CpuBackend> Machine<C> {
             }
             "Malloc" => self.malloc(a1)?,
             "Free" => {
-                self.heap.free(a1);
+                self.libera(a1);
                 SUCCESS
             }
             // O pool de recursos existe para liberar tudo junto no fim da thread; a nossa heap
@@ -84,7 +84,7 @@ impl<C: CpuBackend> Machine<C> {
                 if state.started {
                     EALREADY
                 } else {
-                    let stack = self.malloc(a1.max(THREAD_MIN_STACK))?;
+                    let stack = self.aloca_interno(a1.max(THREAD_MIN_STACK))?;
                     if stack == 0 {
                         ENOMEMORY
                     } else {
@@ -150,7 +150,7 @@ impl<C: CpuBackend> Machine<C> {
                 if existing != 0 {
                     existing
                 } else {
-                    let cb = self.malloc(CALLBACK_SIZE)?;
+                    let cb = self.aloca_interno(CALLBACK_SIZE)?;
                     self.threads.entry(this).or_default().resume_cb = cb;
                     if cb != 0 {
                         // GetResumeCBK promete CALLBACK_Init já feito. O guest pode
@@ -191,7 +191,7 @@ impl<C: CpuBackend> Machine<C> {
         state.exit_code = code;
         let stack = std::mem::take(&mut state.stack);
         let joiners = std::mem::take(&mut state.joiners);
-        self.heap.free(stack);
+        self.libera(stack);
         self.pending_threads.retain(|&t| t != thread);
         for (call, out) in joiners {
             if out != 0 {
@@ -290,7 +290,7 @@ impl<C: CpuBackend> Machine<C> {
             "Malloc" => self.malloc(a1 & !ALLOC_NO_ZMEM)?,
             "Realloc" => self.realloc(a1, a2 & !ALLOC_NO_ZMEM)?,
             "Free" => {
-                self.heap.free(a1);
+                self.libera(a1);
                 SUCCESS
             }
             "StrDup" => {
@@ -352,10 +352,10 @@ impl<C: CpuBackend> Machine<C> {
         // nulo nunca o devolvia.
         if size == 0 {
             self.solta_bitmap_nativo(ptr);
-            self.heap.free(ptr);
+            self.libera(ptr);
             return Ok(0);
         }
-        let old_size = self.heap.size_of(ptr).unwrap_or(0);
+        let old_size = self.tamanho_do_bloco(ptr).unwrap_or(0);
         let new_ptr = self.malloc(size)?;
         // Sem espaço, o bloco antigo fica como estava: é o que o `realloc` promete, e o jogo
         // que confere o nulo ainda tem os dados dele.
@@ -366,7 +366,7 @@ impl<C: CpuBackend> Machine<C> {
             self.copy_guest(new_ptr, ptr, old_size.min(size))?;
         }
         self.realoca_bitmap_nativo(ptr, new_ptr, size & !ALLOC_NO_ZMEM);
-        self.heap.free(ptr);
+        self.libera(ptr);
         Ok(new_ptr)
     }
 
@@ -395,6 +395,41 @@ impl<C: CpuBackend> Machine<C> {
         self.cpu
             .write_mem(addr + size, &vec![FOLGA_DO_BLOCO; (bloco - size) as usize])?;
         Ok(addr)
+    }
+
+    /// Memória para o próprio emulador, na região interna e zerada: ver
+    /// [`loader::INTERNAL_BASE`]. Devolve 0 se a região encheu, como o `malloc`.
+    pub(super) fn aloca_interno(&mut self, size: u32) -> Result<u32, CpuError> {
+        let Some(addr) = self.heap_interno.alloc(size) else {
+            self.assumptions
+                .insert("a região interna do emulador encheu");
+            return Ok(0);
+        };
+        if size > 0 {
+            self.cpu.write_mem(addr, &vec![0u8; size as usize])?;
+        }
+        Ok(addr)
+    }
+
+    /// Devolve um bloco ao alocador de onde ele saiu, pelo endereço.
+    ///
+    /// Todo `free` passa por aqui, inclusive o do jogo: um bloco nosso pode chegar a ele (e um
+    /// save state de antes da região interna traz os nossos dentro do heap).
+    pub(super) fn libera(&mut self, ptr: u32) -> Option<u32> {
+        if loader::e_interno(ptr) {
+            self.heap_interno.free(ptr)
+        } else {
+            self.heap.free(ptr)
+        }
+    }
+
+    /// Tamanho de um bloco vivo, em qualquer dos dois alocadores.
+    pub(super) fn tamanho_do_bloco(&self, ptr: u32) -> Option<u32> {
+        if loader::e_interno(ptr) {
+            self.heap_interno.size_of(ptr)
+        } else {
+            self.heap.size_of(ptr)
+        }
     }
 
     /// As alocações que o heap recusou, com o tamanho e quem pediu.

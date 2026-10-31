@@ -111,13 +111,21 @@ impl DecodeWorker {
         if self.backlog.len() >= 64 {
             return Err("fila de espera de 64 cargas ocupada".into());
         }
-        self.reserved
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                count
-                    .checked_add(size)
-                    .filter(|sum| *sum <= 8 * 1024 * 1024)
-            })
-            .map_err(|_| "fila codificada excede 8 MiB")?;
+        // `AtomicUsize::try_update` ainda é instável: equivalente com `compare_exchange`.
+        let mut atual = self.reserved.load(Ordering::Acquire);
+        loop {
+            let soma = atual
+                .checked_add(size)
+                .filter(|soma| *soma <= 8 * 1024 * 1024)
+                .ok_or("fila codificada excede 8 MiB")?;
+            match self
+                .reserved
+                .compare_exchange_weak(atual, soma, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(observado) => atual = observado,
+            }
+        }
         self.backlog.push_back(Request { key, bytes });
         self.flush();
         Ok(())

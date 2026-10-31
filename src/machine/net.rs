@@ -123,7 +123,7 @@ impl<C: CpuBackend> Machine<C> {
         if remaining == 0 {
             self.cancel_callbacks_of(source)?;
             self.sources.remove(&source);
-            if let Some(peek) = self.peeks.remove(&source) { self.heap.free(peek.buffer); }
+            if let Some(peek) = self.peeks.remove(&source) { self.libera(peek.buffer); }
         }
         Ok(remaining)
     }
@@ -163,7 +163,7 @@ impl<C: CpuBackend> Machine<C> {
                 // ele e **copia** o conteúdo antes de pedir a próxima, então um buffer só,
                 // reaproveitado, basta. Reservar do tamanho da fonte garante que a maior linha
                 // possível caiba.
-                let buffer = self.heap.alloc(bytes.len() as u32 + 1).unwrap_or(0);
+                let buffer = self.aloca_interno(bytes.len() as u32 + 1)?;
                 if buffer == 0 {
                     return Ok(Some(ENOMEMORY));
                 }

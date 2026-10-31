@@ -16,7 +16,7 @@ use zeebx::input::bindings::Source;
 use zeebx::velocidade::rewind::Leitura;
 
 use crate::Emulador;
-use crate::estado;
+use zeebx::ui::estados;
 use zeebx::session::FATIA_MAXIMA;
 
 impl Emulador {
@@ -413,7 +413,7 @@ impl Emulador {
                 self.miniaturas_estado.insert(slot, textura);
             }
         }
-        let miniaturas: [Option<egui::TextureId>; estado::SLOTS] =
+        let miniaturas: [Option<egui::TextureId>; estados::SLOTS] =
             std::array::from_fn(|slot| self.miniaturas_estado.get(&slot).map(|t| t.id()));
         let linhas: Vec<(String, String, bool)> = self
             .estados
@@ -427,7 +427,7 @@ impl Emulador {
                 let status = salvo.as_ref().map_or_else(
                     || self.tr("play.state.empty").to_string(),
                     |salvo| {
-                        let tamanho = estado::tamanho(salvo.bytes);
+                        let tamanho = estados::tamanho(salvo.bytes);
                         self.catalogo
                             .format("play.state.used", &[("size", &tamanho)])
                     },
@@ -585,7 +585,7 @@ impl Emulador {
         if let Some(slot) = salvar_slot {
             let resultado = match (self.estado_id.as_deref(), self.sessao.as_mut()) {
                 (Some(id), Some(sessao)) => {
-                    estado::salva(&self.estados_raiz, id, slot, sessao)
+                    estados::salva(&self.estados_raiz, id, slot, sessao)
                 }
                 _ => Err("save state indisponível".to_string()),
             };
@@ -613,7 +613,7 @@ impl Emulador {
         if let Some(slot) = carregar_slot {
             let resultado = match (self.estado_id.as_deref(), self.sessao.as_mut()) {
                 (Some(id), Some(sessao)) => {
-                    estado::carrega(&self.estados_raiz, id, slot, sessao)
+                    estados::carrega(&self.estados_raiz, id, slot, sessao)
                 }
                 _ => Err("save state indisponível".to_string()),
             };
@@ -670,7 +670,7 @@ impl Emulador {
 fn textura_de_estado(
     ctx: &egui::Context,
     slot: usize,
-    miniatura: &estado::Miniatura,
+    miniatura: &estados::Miniatura,
 ) -> egui::TextureHandle {
     let mut rgba = Vec::with_capacity(miniatura.largura * miniatura.altura * 4);
     for pixel in miniatura.rgb565.chunks_exact(2) {
