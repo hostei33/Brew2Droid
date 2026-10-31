@@ -764,8 +764,11 @@ impl<C: CpuBackend> Machine<C> {
                 let rect = self.translated_rect(rect);
                 // Um preenchimento apaga o que estava embaixo — inclusive texto. Sem isto a
                 // camada vetorial guardaria uma frase que o jogo já cobriu, e ela reapareceria
-                // por cima do desenho novo.
-                self.apaga_textos_em(rect);
+                // por cima do desenho novo. Vale só quando o destino é a tela: limpar um bitmap
+                // fora da tela não apaga nada do que está à vista.
+                if self.target().is_ok_and(|alvo| alvo == self.device_bitmap) {
+                    self.apaga_textos_em(rect);
+                }
                 let (stroke, fill, filled) = (
                     self.graphics.stroke,
                     self.graphics.fill,
@@ -1114,13 +1117,19 @@ impl<C: CpuBackend> Machine<C> {
         // Com a camada vetorial ligada, o texto não vira pixel aqui: vai anotado para o frontend
         // desenhar no tamanho da tela. Escrever nos dois lugares deixaria a letra de 11 px por
         // baixo da nova, com a borda do console aparecendo como sombra.
-        if self.texto_vetorial {
+        //
+        // Só vale para o **destino que está na tela**. Um jogo que desenha texto num bitmap
+        // fora da tela — para esticar, recortar, aplicar efeito — precisa do pixel de verdade; a
+        // camada é do quadro final, e anotar o texto de um bitmap o faria aparecer solto por
+        // cima do jogo.
+        let alvo = self.target()?;
+        if self.texto_vetorial && alvo == self.device_bitmap {
             self.anota_texto(text, x, y, cor, &glifos);
             return Ok(true);
         }
         let nativo = cor.to_rgb565();
         let recorte = self.clip;
-        let target = self.target()?;
+        let target = alvo;
         let Some(surface) = self.bitmaps.get_mut(&target) else {
             return Ok(true);
         };
