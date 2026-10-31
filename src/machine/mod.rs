@@ -2372,6 +2372,21 @@ pub struct Machine<C: CpuBackend> {
     /// quando falta a fonte, e um jogo que desenha várias telas de aviso ao longo da execução
     /// aparece no relatório como uma sopa de mensagens sem dono.
     textos_desenhados: std::collections::VecDeque<(u32, i32, i32, String)>,
+    /// Os textos que estão na tela agora, para o frontend redesenhá-los no tamanho final.
+    ///
+    /// Numa tela de 120x160 um ideograma ocupa 11 px e o aparelho estica o quadro nove vezes: o
+    /// que se vê é um bloco, com as horizontais já perdidas. Aqui fica o texto, a posição e a cor,
+    /// e o frontend rasteriza de novo — em 99 px, onde o traço existe.
+    ///
+    /// A lista acompanha o framebuffer: entra no desenho, sai quando um preenchimento cobre a
+    /// área, e é limpa quando a tela é limpa. `texto_vetorial` decide se o texto também é escrito
+    /// no framebuffer — escrever nos dois lugares deixaria o texto do console por baixo do novo,
+    /// borrando a borda.
+    textos_vetoriais: Vec<crate::video::font::TextoDesenhado>,
+    /// Se o texto vai para `textos_vetoriais` em vez de virar pixel no framebuffer.
+    texto_vetorial: bool,
+    /// Muda a cada alteração da lista, para o frontend saber quando refazer a camada.
+    versao_dos_textos: u64,
     /// Alocações que o heap recusou, por tamanho pedido e por quem pediu.
     ///
     /// O `malloc` do BREW devolve zero quando não cabe, e um jogo que não distingue "não cabe" de
@@ -3228,6 +3243,9 @@ impl<C: CpuBackend> Machine<C> {
             web_requests: BTreeSet::new(),
             collections: HashMap::new(),
             textos_desenhados: std::collections::VecDeque::new(),
+            textos_vetoriais: Vec::new(),
+            texto_vetorial: false,
+            versao_dos_textos: 0,
             alocacoes_recusadas: BTreeSet::new(),
             checagens_recusadas: BTreeSet::new(),
             fontes: std::collections::HashMap::new(),

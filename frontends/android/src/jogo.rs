@@ -146,6 +146,10 @@ impl Emulador {
             if crate::zeebo_art::paint(&mut self.zeebo_controls,&mut self.zeebo_input,ctx,self.keypad_settings.transparency){self.sync_handset_keys();}
         }else if handset_game && self.handset_keys.is_enabled() { crate::handset::paint_layout(&mut self.handset_keys, ctx,self.keypad_settings.transparency,&self.keypad_layout); }
         let Some(sessao) = self.sessao.as_mut() else { return; };
+        // O texto é a única coisa da tela que ganha com a resolução do aparelho: o quadro do
+        // console é esticado, a letra é desenhada de novo. Ligado desde o primeiro quadro para
+        // não misturar texto de 11 px com texto nítido na mesma tela.
+        sessao.define_texto_vetorial(texto_nitido());
         let parado = self.confirmando || self.pausado || self.audio_focus_paused || self.rewind.voltando();
 
         let suave = self.settings.graphics.smooth;
@@ -274,6 +278,29 @@ impl Emulador {
                 self.settings.graphics.keep_aspect,
             );
 
+            // O retângulo do quadro é o mesmo nos dois caminhos — o da placa e o da textura —, e
+            // a camada de texto se apoia nele. Calculá-lo uma vez também evita que os dois se
+            // desalinhem na próxima mudança de enquadramento.
+            let area = ui.available_rect_before_wrap();
+            let remaining = (area.height() - tamanho.y).max(0.0);
+            let offset = match gravity {
+                crate::game_options::ScreenGravity::Top => 0.0,
+                crate::game_options::ScreenGravity::Center => remaining / 2.0,
+                crate::game_options::ScreenGravity::Bottom => remaining,
+            };
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(area.center().x - tamanho.x / 2.0, area.top() + offset),
+                tamanho,
+            );
+            ui.allocate_rect(rect, egui::Sense::hover());
+            if handset_game && !parado {
+                self.handset_touch.viewport = Some((
+                    [rect.min.x, rect.min.y],
+                    [rect.max.x, rect.max.y],
+                    [largura as u16, altura as u16],
+                ));
+            }
+
             if pela_placa {
                 // O fecho vai para dentro do egui e é chamado no meio da pintura, com o
                 // contexto corrente: nada daqui pode ser emprestado do `self`, e por isso o
@@ -281,17 +308,6 @@ impl Emulador {
                 // partilhado com o cache, e não copiado a cada pintura.
                 let pintor = self.pintor.clone();
                 let (lg, at) = (largura as i32, altura as i32);
-                let area = ui.available_rect_before_wrap();
-                let remaining = (area.height() - tamanho.y).max(0.0);
-                let offset = match gravity { crate::game_options::ScreenGravity::Top => 0.0,
-                    crate::game_options::ScreenGravity::Center => remaining / 2.0,
-                    crate::game_options::ScreenGravity::Bottom => remaining };
-                let rect = egui::Rect::from_min_size(egui::pos2(area.center().x - tamanho.x / 2.0, area.top() + offset), tamanho);
-                ui.allocate_rect(rect, egui::Sense::hover());
-                if handset_game && !parado {
-                    self.handset_touch.viewport = Some(([rect.min.x,rect.min.y],
-                        [rect.max.x,rect.max.y],[largura as u16,altura as u16]));
-                }
                 ui.painter().add(egui::PaintCallback {
                     rect,
                     callback: std::sync::Arc::new(egui_glow::CallbackFn::new(
@@ -332,20 +348,61 @@ impl Emulador {
                         },
                     )),
                 });
-                return;
+            } else if let Some(textura) = &self.textura {
+                egui::Image::new((textura.id(), tamanho))
+                    .fit_to_exact_size(tamanho)
+                    .paint_at(ui, rect);
             }
 
-            if let Some(textura) = &self.textura {
-                let area = ui.available_rect_before_wrap();
-                let remaining = (area.height() - tamanho.y).max(0.0);
-                let offset = match gravity { crate::game_options::ScreenGravity::Top => 0.0,
-                    crate::game_options::ScreenGravity::Center => remaining / 2.0,
-                    crate::game_options::ScreenGravity::Bottom => remaining };
-                let rect = egui::Rect::from_min_size(egui::pos2(area.center().x-tamanho.x/2.0,area.top()+offset),tamanho);
-                ui.allocate_rect(rect,egui::Sense::hover());
-                egui::Image::new((textura.id(), tamanho)).fit_to_exact_size(tamanho).paint_at(ui,rect);
-                if handset_game && !parado {
-                    self.handset_touch.viewport = Some(([rect.min.x,rect.min.y],[rect.max.x,rect.max.y],[largura as u16,altura as u16]));
+            // A camada de texto por cima do quadro, e no tamanho da tela.
+            //
+            // Um jogo de 120x160 cabe na palma da mão: o ideograma tem 11 px, e o aparelho
+            // estica o quadro nove vezes. Aumentar aquele pixel não devolve o traço que ele
+            // nunca teve — só o desenho novo, na resolução do aparelho, devolve.
+            if let Some(sessao) = self.sessao.as_ref() {
+                if sessao.texto_vetorial() {
+                    let ppp = ui.ctx().pixels_per_point();
+                    let (pw, ph) = (
+                        (tamanho.x * ppp).round().max(1.0) as u32,
+                        (tamanho.y * ppp).round().max(1.0) as u32,
+                    );
+                    let chave = (sessao.hash_dos_textos(), pw, ph);
+                    if self.textura_texto.as_ref().map(|(k, _)| *k) != Some(chave) {
+                        let escala_x = pw as f32 / largura as f32;
+                        let escala_y = ph as f32 / altura as f32;
+                        match sessao.pinta_camada_de_texto(pw, ph, escala_x, escala_y) {
+                            Some(rgba) => {
+                                let imagem = egui::ColorImage::from_rgba_unmultiplied(
+                                    [pw as usize, ph as usize],
+                                    &rgba,
+                                );
+                                match &mut self.textura_texto {
+                                    Some((versao, textura)) => {
+                                        textura.set(imagem, egui::TextureOptions::LINEAR);
+                                        *versao = chave;
+                                    }
+                                    vazio => {
+                                        *vazio = Some((
+                                            chave,
+                                            ui.ctx().load_texture(
+                                                "texto",
+                                                imagem,
+                                                egui::TextureOptions::LINEAR,
+                                            ),
+                                        ))
+                                    }
+                                }
+                            }
+                            // Sem fonte não há camada: o quadro do console, com o texto que
+                            // ele tiver, continua valendo.
+                            None => self.textura_texto = None,
+                        }
+                    }
+                    if let Some((_, textura)) = &self.textura_texto {
+                        egui::Image::new((textura.id(), tamanho))
+                            .fit_to_exact_size(tamanho)
+                            .paint_at(ui, rect);
+                    }
                 }
             }
         });
@@ -764,4 +821,13 @@ impl Emulador {
                     });
             });
     }
+}
+
+/// Se o texto deve ser desenhado de novo no tamanho da tela.
+///
+/// `ZEEBX_TEXTO_NITIDO=0` volta ao texto do framebuffer. Serve para comparar os dois lados, e é
+/// a saída se um jogo depender de ler os próprios pixels de texto — com a camada ligada eles não
+/// estão lá.
+fn texto_nitido() -> bool {
+    std::env::var_os("ZEEBX_TEXTO_NITIDO").is_none_or(|v| v != "0")
 }

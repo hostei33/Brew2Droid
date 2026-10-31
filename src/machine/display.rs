@@ -762,6 +762,10 @@ impl<C: CpuBackend> Machine<C> {
                     return Ok(Some(EBADPARM));
                 };
                 let rect = self.translated_rect(rect);
+                // Um preenchimento apaga o que estava embaixo — inclusive texto. Sem isto a
+                // camada vetorial guardaria uma frase que o jogo já cobriu, e ela reapareceria
+                // por cima do desenho novo.
+                self.apaga_textos_em(rect);
                 let (stroke, fill, filled) = (
                     self.graphics.stroke,
                     self.graphics.fill,
@@ -1098,11 +1102,20 @@ impl<C: CpuBackend> Machine<C> {
         y: i32,
         cor: Rgb,
     ) -> Result<bool, CpuError> {
-        let Some(fonte) = self.font.as_ref() else {
-            return Ok(false);
+        let glifos = {
+            let Some(fonte) = self.font.as_ref() else {
+                return Ok(false);
+            };
+            fonte.layout(text, FONT_SIZE)
         };
-        let glifos = fonte.layout(text, FONT_SIZE);
         if glifos.is_empty() {
+            return Ok(true);
+        }
+        // Com a camada vetorial ligada, o texto não vira pixel aqui: vai anotado para o frontend
+        // desenhar no tamanho da tela. Escrever nos dois lugares deixaria a letra de 11 px por
+        // baixo da nova, com a borda do console aparecendo como sombra.
+        if self.texto_vetorial {
+            self.anota_texto(text, x, y, cor, &glifos);
             return Ok(true);
         }
         let nativo = cor.to_rgb565();
@@ -1158,6 +1171,119 @@ impl<C: CpuBackend> Machine<C> {
         Ok(true)
     }
 
+    /// Guarda o texto para a camada vetorial, no lugar do pixel que ele não vai virar.
+    fn anota_texto(
+        &mut self,
+        texto: &str,
+        x: i32,
+        y: i32,
+        cor: Rgb,
+        glifos: &[crate::video::font::Glyph],
+    ) {
+        let caixa = caixa_dos_glifos(glifos, x, y);
+        // Um texto redesenhado no mesmo lugar substitui o anterior: sem isso a lista cresceria a
+        // cada quadro num jogo que repinta a mesma frase.
+        self.textos_vetoriais.retain(|t| !sobrepoe(t.caixa, caixa));
+        self.textos_vetoriais.push(crate::video::font::TextoDesenhado {
+            texto: texto.to_string(),
+            x,
+            y,
+            cor,
+            recorte: self.clip,
+            caixa,
+        });
+        self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+    }
+
+    /// Tira da camada o que um preenchimento acabou de cobrir.
+    fn apaga_textos_em(&mut self, rect: Rect) {
+        if self.textos_vetoriais.is_empty() {
+            return;
+        }
+        let antes = self.textos_vetoriais.len();
+        self.textos_vetoriais.retain(|t| !sobrepoe(t.caixa, rect));
+        if self.textos_vetoriais.len() != antes {
+            self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+        }
+    }
+
+    /// Os textos que estão na tela agora.
+    pub fn textos_vetoriais(&self) -> &[crate::video::font::TextoDesenhado] {
+        &self.textos_vetoriais
+    }
+
+    /// Se o texto está indo para a camada vetorial em vez do framebuffer.
+    pub fn texto_vetorial(&self) -> bool {
+        self.texto_vetorial
+    }
+
+    /// Liga ou desliga a camada vetorial.
+    ///
+    /// Ligada, o texto **não** é escrito no framebuffer: quem desenha é o frontend, no tamanho
+    /// final da tela. Desligada, tudo volta ao comportamento do console — o que também é o que
+    /// salvar a tela e tirar uma foto esperam.
+    pub fn define_texto_vetorial(&mut self, ativo: bool) {
+        if self.texto_vetorial == ativo {
+            return;
+        }
+        self.texto_vetorial = ativo;
+        // A lista velha não vale mais: com o modo trocado, os textos que estavam nela já estão
+        // (ou vão estar) no framebuffer, e ficariam repetidos.
+        self.textos_vetoriais.clear();
+        self.versao_dos_textos = self.versao_dos_textos.wrapping_add(1);
+    }
+
+    /// Muda a cada alteração da camada de texto, para o frontend saber quando refazê-la.
+    pub fn versao_dos_textos(&self) -> u64 {
+        self.versao_dos_textos
+    }
+
+    /// O conteúdo da camada, resumido num número.
+    ///
+    /// Vale mais que [`Machine::versao_dos_textos`] para o frontend: um jogo que limpa a tela e
+    /// redesenha as mesmas frases a cada quadro muda a versão sem mudar nada na tela, e refazer a
+    /// camada custa uma rasterização de todos os textos no tamanho final. O resumo só muda quando
+    /// o que está escrito muda.
+    pub fn hash_dos_textos(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut resumo = std::collections::hash_map::DefaultHasher::new();
+        self.textos_vetoriais.len().hash(&mut resumo);
+        for texto in &self.textos_vetoriais {
+            texto.texto.hash(&mut resumo);
+            texto.x.hash(&mut resumo);
+            texto.y.hash(&mut resumo);
+            (texto.cor.r, texto.cor.g, texto.cor.b).hash(&mut resumo);
+            texto
+                .recorte
+                .map(|r| (r.x, r.y, r.width, r.height))
+                .hash(&mut resumo);
+        }
+        resumo.finish()
+    }
+
+    /// Rasteriza a camada de texto no tamanho final da tela.
+    ///
+    /// `escala_x` e `escala_y` dizem quantos pixels de tela cada pixel do console ocupa — é o
+    /// mesmo número que o frontend usa para esticar o quadro. Devolve `None` quando não há fonte:
+    /// sem ela não há o que desenhar, e o frontend deve ficar com o quadro do console.
+    pub fn pinta_camada_de_texto(
+        &self,
+        largura: u32,
+        altura: u32,
+        escala_x: f32,
+        escala_y: f32,
+    ) -> Option<Vec<u8>> {
+        let fonte = self.font.as_ref()?;
+        Some(fonte.pinta_textos(
+            &self.textos_vetoriais,
+            largura,
+            altura,
+            FONT_SIZE,
+            escala_x,
+            escala_y,
+        ))
+    }
+
     /// A tela, como está agora.
     pub fn screen(&self) -> &Framebuffer {
         self.bitmaps
@@ -1198,6 +1324,34 @@ const IDF_ALIGN_RIGHT: u32 = 0x40;
 const IDF_ALIGN_TOP: u32 = 0x100;
 const IDF_ALIGN_MIDDLE: u32 = 0x200;
 const IDF_ALIGN_BOTTOM: u32 = 0x400;
+
+/// O retângulo que os glifos ocupam, em pixels do console.
+fn caixa_dos_glifos(glifos: &[crate::video::font::Glyph], x: i32, y: i32) -> Rect {
+    let (mut x0, mut y0) = (i32::MAX, i32::MAX);
+    let (mut x1, mut y1) = (i32::MIN, i32::MIN);
+    for glifo in glifos {
+        x0 = x0.min(x + glifo.x);
+        y0 = y0.min(y + glifo.y);
+        x1 = x1.max(x + glifo.x + glifo.width as i32);
+        y1 = y1.max(y + glifo.y + glifo.height as i32);
+    }
+    let limita = |v: i32| v.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+    Rect {
+        x: limita(x0),
+        y: limita(y0),
+        width: limita(x1 - x0),
+        height: limita(y1 - y0),
+    }
+}
+
+/// Se dois retângulos se cruzam. Bordas que só se encostam não contam.
+fn sobrepoe(a: Rect, b: Rect) -> bool {
+    let (ax0, ay0) = (i32::from(a.x), i32::from(a.y));
+    let (ax1, ay1) = (ax0 + i32::from(a.width), ay0 + i32::from(a.height));
+    let (bx0, by0) = (i32::from(b.x), i32::from(b.y));
+    let (bx1, by1) = (bx0 + i32::from(b.width), by0 + i32::from(b.height));
+    ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1
+}
 
 /// Mistura `frente` sobre `fundo`, na proporção `alfa` (0 = só o fundo, 255 = só a frente).
 ///

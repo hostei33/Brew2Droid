@@ -1921,6 +1921,40 @@ impl Session {
             .unwrap_or_else(|| self.machine.screen())
     }
 
+    /// Liga a camada vetorial: o texto deixa de virar pixel do framebuffer e passa a ser
+    /// desenhado pelo frontend, no tamanho final da tela. Ver
+    /// [`crate::machine::Machine::define_texto_vetorial`].
+    pub fn define_texto_vetorial(&mut self, ativo: bool) {
+        self.machine.define_texto_vetorial(ativo);
+    }
+
+    /// Se o texto está indo para a camada vetorial.
+    pub fn texto_vetorial(&self) -> bool {
+        self.machine.texto_vetorial()
+    }
+
+    /// Muda a cada alteração da camada de texto.
+    pub fn versao_dos_textos(&self) -> u64 {
+        self.machine.versao_dos_textos()
+    }
+
+    /// O conteúdo da camada de texto, resumido num número.
+    pub fn hash_dos_textos(&self) -> u64 {
+        self.machine.hash_dos_textos()
+    }
+
+    /// Rasteriza a camada de texto no tamanho final da tela, em RGBA não pré-multiplicado.
+    pub fn pinta_camada_de_texto(
+        &self,
+        largura: u32,
+        altura: u32,
+        escala_x: f32,
+        escala_y: f32,
+    ) -> Option<Vec<u8>> {
+        self.machine
+            .pinta_camada_de_texto(largura, altura, escala_x, escala_y)
+    }
+
     /// Põe à mostra a próxima tela intermediária, se houver, e diz se pôs.
     ///
     /// Enquanto houver, quem mostra a sessão deve exibir uma por quadro sem avançar o jogo:

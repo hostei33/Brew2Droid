@@ -588,6 +588,12 @@ pub struct Emulador {
     sessao: Option<Session>,
     /// O quadro do console como textura do egui, trocada a cada quadro novo.
     textura: Option<egui::TextureHandle>,
+    /// A camada de texto rasterizada no tamanho da tela, e a versão que está nela.
+    ///
+    /// Separada do quadro porque muda em outro ritmo: o jogo repinta a tela a cada quadro e
+    /// troca uma linha de diálogo a cada tanto. Refazer a camada custa uma rasterização de todos
+    /// os textos no tamanho final, e só vale quando algum deles mudou.
+    textura_texto: Option<((u64, u32, u32), egui::TextureHandle)>,
     /// O que está subido na textura: a série e as escritas do quadro, mais o filtro. A tela
     /// repinta mais vezes que o jogo desenha, e sem esta chave cada repintura refaria a
     /// conversão inteira.
@@ -770,6 +776,7 @@ impl Emulador {
             capas: HashMap::new(),
             sessao: None,
             textura: None,
+            textura_texto: None,
             quadro: None,
             fps: Default::default(),
             foco_da_barra: None,

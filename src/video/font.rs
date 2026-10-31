@@ -40,6 +40,8 @@ use std::path::PathBuf;
 
 use ab_glyph::{Font as _, FontVec, GlyphId, PxScale, ScaleFont as _};
 
+use super::display::{Rect, Rgb};
+
 /// Uma fonte que só entra quando a do jogo não desenha o caractere.
 struct Reserva {
     face: FontVec,
@@ -438,6 +440,113 @@ impl Font {
         }
         saida
     }
+
+    /// Desenha `textos` numa imagem RGBA do tamanho final da tela.
+    ///
+    /// `escala_x` e `escala_y` são quantos pixels de tela cada pixel do console ocupa — iguais no
+    /// caso normal, separados para o dia em que a proporção for esticada. A fonte é rasterizada
+    /// **no tamanho final**, e é essa a diferença: o framebuffer de 120x160 guarda um ideograma de
+    /// 11 px, que o aparelho estica nove vezes; aqui o mesmo ideograma é desenhado com 99 px, e o
+    /// traço que o framebuffer perdeu nunca chegou a se perder.
+    ///
+    /// A imagem sai **não pré-multiplicada**, que é o que o egui espera de um `ColorImage`.
+    pub fn pinta_textos(
+        &self,
+        textos: &[TextoDesenhado],
+        largura: u32,
+        altura: u32,
+        tamanho: f32,
+        escala_x: f32,
+        escala_y: f32,
+    ) -> Vec<u8> {
+        let mut imagem = vec![0u8; largura as usize * altura as usize * 4];
+        if textos.is_empty() || largura == 0 || altura == 0 {
+            return imagem;
+        }
+        // O tamanho vem em pixels do console; a tela tem `escala_y` vezes mais.
+        let corpo = tamanho * escala_y;
+        for texto in textos {
+            let (ox, oy) = (
+                (texto.x as f32 * escala_x).round() as i32,
+                (texto.y as f32 * escala_y).round() as i32,
+            );
+            let recorte = texto.recorte.map(|r| {
+                let x0 = (f32::from(r.x) * escala_x).round() as i32;
+                let y0 = (f32::from(r.y) * escala_y).round() as i32;
+                let x1 = ((f32::from(r.x) + f32::from(r.width)) * escala_x).round() as i32;
+                let y1 = ((f32::from(r.y) + f32::from(r.height)) * escala_y).round() as i32;
+                (x0, y0, x1, y1)
+            });
+            for glifo in self.layout(&texto.texto, corpo) {
+                let (gx, gy) = (ox + glifo.x, oy + glifo.y);
+                for linha in 0..glifo.height as i32 {
+                    for coluna in 0..glifo.width as i32 {
+                        let alfa =
+                            glifo.coverage[(linha as u32 * glifo.width + coluna as u32) as usize];
+                        if alfa == 0 {
+                            continue;
+                        }
+                        let (px, py) = (gx + coluna, gy + linha);
+                        if px < 0 || py < 0 || px >= largura as i32 || py >= altura as i32 {
+                            continue;
+                        }
+                        if let Some((x0, y0, x1, y1)) = recorte {
+                            if px < x0 || py < y0 || px >= x1 || py >= y1 {
+                                continue;
+                            }
+                        }
+                        mescla(
+                            &mut imagem,
+                            (py as u32 * largura + px as u32) as usize,
+                            texto.cor,
+                            alfa,
+                        );
+                    }
+                }
+            }
+        }
+        imagem
+    }
+}
+
+/// Compõe um pixel de texto sobre o que já está na imagem, sem pré-multiplicar.
+///
+/// Duas passadas de texto podem cair no mesmo pixel — um rótulo por cima de outro, o cursor sobre
+/// a letra. A conta é a do `over` normal: o resultado tem de continuar legível sobre qualquer
+/// fundo, e não há fundo aqui: a imagem é transparente e quem compõe é a placa.
+fn mescla(imagem: &mut [u8], pixel: usize, cor: Rgb, alfa: u8) {
+    let i = pixel * 4;
+    let frente = u32::from(alfa);
+    let tras = u32::from(imagem[i + 3]);
+    let resta = 255 - frente;
+    let total = frente + tras * resta / 255;
+    if total == 0 {
+        return;
+    }
+    for (canal, valor) in [(0, cor.r), (1, cor.g), (2, cor.b)] {
+        let novo = (u32::from(valor) * frente + u32::from(imagem[i + canal]) * tras * resta / 255)
+            / total;
+        imagem[i + canal] = novo.min(255) as u8;
+    }
+    imagem[i + 3] = total.min(255) as u8;
+}
+
+/// Um texto que o jogo desenhou, guardado para ser redesenhado no tamanho final da tela.
+///
+/// O framebuffer tem a resolução do console — 120x160 num jogo de bolso. Nela um ideograma cabe em
+/// 11 px, e o aparelho estica o quadro nove vezes: o que chega ao olho é um bloco de pixels, com as
+/// horizontais já perdidas **antes** de qualquer aumento. Guardar o texto e a posição permite
+/// rasterizá-lo de novo em 99 px, onde o traço existe.
+pub struct TextoDesenhado {
+    pub texto: String,
+    /// Canto superior esquerdo, em pixels do console.
+    pub x: i32,
+    pub y: i32,
+    pub cor: Rgb,
+    /// O recorte que valia quando o texto foi desenhado, em pixels do console.
+    pub recorte: Option<Rect>,
+    /// O que ele ocupa, para saber quando um preenchimento o apagou.
+    pub caixa: Rect,
 }
 
 /// Quanto o `PxScale` da reserva tem de crescer para ela ter o mesmo `em` da principal.
@@ -806,6 +915,55 @@ mod prova_visual {
         despeja("/tmp/cjk_antes.pgm", &base, &linhas);
         despeja("/tmp/cjk_depois.pgm", &com_reserva, &linhas);
         println!("escrito /tmp/cjk_antes.pgm e /tmp/cjk_depois.pgm");
+    }
+
+    /// A camada de texto desenhada no tamanho final da tela.
+    ///
+    /// É o que o frontend faz com um jogo de 120x160: o quadro é esticado, o texto é rasterizado
+    /// de novo. O mesmo texto que no framebuffer sai como bloco, aqui sai com traço.
+    #[test]
+    #[ignore]
+    fn desenha_a_camada_de_texto_no_tamanho_da_tela() {
+        let (Some(principal), Some(reserva)) = (tests::fonte_latina(), tests::reserva()) else {
+            return;
+        };
+        let fonte = principal.com_reserva(reserva);
+        let linhas = [("美国", 0), ("时间 02:54", 1), ("部门地下车库", 2)];
+        let textos: Vec<TextoDesenhado> = linhas
+            .iter()
+            .map(|(texto, linha)| TextoDesenhado {
+                texto: (*texto).into(),
+                x: 4,
+                y: 8 + linha * 18,
+                cor: Rgb {
+                    r: 20,
+                    g: 24,
+                    b: 16,
+                },
+                recorte: None,
+                caixa: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                },
+            })
+            .collect();
+        let (largura, altura, escala) = (1080u32, 1440u32, 9.0f32);
+        let inicio = std::time::Instant::now();
+        let rgba = fonte.pinta_textos(&textos, largura, altura, 16.0, escala, escala);
+        println!("camada de texto: {:?}", inicio.elapsed());
+        // Sobre o verde do jogo, para o olho ver o que o aparelho mostraria.
+        let mut saida = format!("P6\n{largura} {altura}\n255\n").into_bytes();
+        for pixel in rgba.chunks_exact(4) {
+            let alfa = u32::from(pixel[3]);
+            for (canal, fundo) in [150u32, 160, 110].iter().enumerate() {
+                let cor = (u32::from(pixel[canal]) * alfa + fundo * (255 - alfa)) / 255;
+                saida.push(cor as u8);
+            }
+        }
+        std::fs::write("/tmp/camada.ppm", saida).unwrap();
+        println!("escrito /tmp/camada.ppm");
     }
 
     /// O que a mistura muda num ideograma de 13 px: sem ela o traço fino some.

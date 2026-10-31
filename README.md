@@ -56,6 +56,22 @@ thinner than one pixel, the coverage splits between two rows, and cutting at 50%
 entirely** — `美` lost the base, `国` lost the `玉` inside. Fallback glyphs are therefore blended with
 whatever is already on screen, so a half-covered pixel comes out grey instead of vanishing.
 
+### Text layer
+
+Blending helps, but it cannot invent strokes that were never in the frame. A game that runs at
+120x160 gives an ideograph 11 px, and the phone stretches that frame nine times: the strokes are gone
+*before* the upscale, and no filter brings them back.
+
+So the emulator stops drawing text into the framebuffer and remembers it instead — string, position,
+colour, clip — and the Android frontend draws it again at the screen's own resolution, on top of the
+stretched frame. Same font (the game's, with the CJK fallback), same layout, only a size that matches
+the display. A dialogue line that was a row of blocks becomes readable text.
+
+The list follows the framebuffer: a text enters when it is drawn, leaves when a fill covers its
+rectangle, and is cleared when the screen is cleared. Turning the layer off
+(`ZEEBX_TEXTO_NITIDO=0`) returns to text painted into the framebuffer, which is also what a
+screenshot or a headless run expects.
+
 Line breaking follows the script too: Chinese, Japanese and Korean have no spaces between words, so
 they break between characters, and closing punctuation never starts a line.
 
