@@ -253,29 +253,42 @@ impl<C: CpuBackend> Machine<C> {
                 let pedidos = self.cpu.read_reg(Reg::R2) as i32;
                 let out_chars = self.stack_arg(0)?;
                 let out_largura = self.stack_arg(1)?;
-                let mut quantos = 0u32;
+                let mut unidades: Vec<u16> = Vec::new();
                 if texto != 0 {
                     let mut cursor = texto;
                     let limite = match pedidos {
                         n if n < 0 => MAX_STRING as u32,
                         n => n as u32,
                     };
-                    while quantos < limite && quantos < MAX_STRING as u32 {
+                    while (unidades.len() as u32) < limite && unidades.len() < MAX_STRING {
                         let mut par = [0u8; 2];
                         self.cpu.read_mem(cursor, &mut par)?;
-                        if u16::from_le_bytes(par) == 0 {
+                        let unidade = u16::from_le_bytes(par);
+                        if unidade == 0 {
                             break;
                         }
-                        quantos += 1;
+                        unidades.push(unidade);
                         cursor += 2;
                     }
                 }
+                let quantos = unidades.len() as u32;
                 if out_chars != 0 {
                     self.cpu.write_u32(out_chars, quantos)?;
                 }
                 if out_largura != 0 {
-                    self.cpu
-                        .write_u32(out_largura, quantos * u32::from(metricas.max_char_width))?;
+                    // A tabela de `max_char_width` dá **um** valor por classe de fonte, e um
+                    // ideograma ocupa o dobro de uma letra latina: um menu que mede o texto
+                    // chinês por ela reserva metade do espaço e corta a frase. Quando há fonte
+                    // carregada e o texto não é latino, quem mede é ela. O texto latino continua
+                    // na tabela, que é a medida que os jogos já esperam.
+                    let texto = String::from_utf16_lossy(&unidades);
+                    let largura = match self.font.as_ref() {
+                        Some(fonte) if texto.chars().any(|c| !c.is_ascii()) => {
+                            fonte.width(&texto, FONT_SIZE)
+                        }
+                        _ => quantos * u32::from(metricas.max_char_width),
+                    };
+                    self.cpu.write_u32(out_largura, largura)?;
                 }
                 SUCCESS
             }

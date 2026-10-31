@@ -1988,17 +1988,25 @@ fn decodifica_entidades(texto: &str) -> String {
 }
 
 /// Quebra um parágrafo em linhas que caibam em `largura`, pela medida da fonte.
+///
+/// A quebra é por palavra, e **um ideograma é uma palavra**: o chinês não separa nada por espaço,
+/// e enquanto o parágrafo inteiro era uma "palavra" só, ele nunca quebrava — a linha passava da
+/// borda do controle e o fim do texto desaparecia no recorte, sem aviso.
+///
+/// A pontuação de fecho (`，`, `。`, `」`) anda junto com o ideograma anterior, porque começar
+/// linha com ela é erro de composição em chinês.
 fn quebra_linhas(paragrafo: &str, largura: u32, mede: impl Fn(&str) -> u32) -> Vec<String> {
     let mut linhas = Vec::new();
     let mut linha = String::new();
-    for palavra in paragrafo.split_whitespace() {
-        let candidata = match linha.is_empty() {
-            true => palavra.to_string(),
-            false => format!("{linha} {palavra}"),
+    for (separado, unidade) in unidades(paragrafo) {
+        let candidata = match (linha.is_empty(), separado) {
+            (true, _) => unidade.clone(),
+            (false, true) => format!("{linha} {unidade}"),
+            (false, false) => format!("{linha}{unidade}"),
         };
         if !linha.is_empty() && mede(&candidata) > largura {
             linhas.push(std::mem::take(&mut linha));
-            linha = palavra.to_string();
+            linha = unidade;
         } else {
             linha = candidata;
         }
@@ -2007,6 +2015,83 @@ fn quebra_linhas(paragrafo: &str, largura: u32, mede: impl Fn(&str) -> u32) -> V
         linhas.push(linha);
     }
     linhas
+}
+
+/// As unidades de quebra de um parágrafo, com a marca de "havia espaço antes desta".
+///
+/// Uma palavra latina é uma unidade; um ideograma é uma unidade; a pontuação de fecho é
+/// acrescentada à unidade anterior.
+fn unidades(paragrafo: &str) -> Vec<(bool, String)> {
+    /// Fecha a palavra em construção, se houver uma.
+    fn fecha(saida: &mut Vec<(bool, String)>, palavra: &mut String, espaco: &mut bool) {
+        if palavra.is_empty() {
+            return;
+        }
+        saida.push((*espaco, std::mem::take(palavra)));
+        *espaco = false;
+    }
+
+    let mut saida: Vec<(bool, String)> = Vec::new();
+    let mut palavra = String::new();
+    let mut espaco = false;
+    for c in paragrafo.chars() {
+        if c.is_whitespace() {
+            fecha(&mut saida, &mut palavra, &mut espaco);
+            if !saida.is_empty() {
+                espaco = true;
+            }
+            continue;
+        }
+        if e_cjk(c) {
+            fecha(&mut saida, &mut palavra, &mut espaco);
+            if e_fecho(c) {
+                if let Some((_, ultima)) = saida.last_mut() {
+                    ultima.push(c);
+                    continue;
+                }
+            }
+            saida.push((espaco, c.to_string()));
+            espaco = false;
+            continue;
+        }
+        palavra.push(c);
+    }
+    fecha(&mut saida, &mut palavra, &mut espaco);
+    saida
+}
+
+/// Os idiomas que se escrevem sem espaço entre as palavras.
+fn e_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF |   // jamo de Hangul
+        0x2E80..=0x2EFF |   // radicais CJK
+        0x2F00..=0x2FDF |
+        0x3000..=0x303F |   // pontuação CJK
+        0x3040..=0x30FF |   // hiragana e katakana
+        0x3100..=0x312F |
+        0x3130..=0x318F |
+        0x31C0..=0x31EF |
+        0x3200..=0x32FF |
+        0x3300..=0x33FF |
+        0x3400..=0x4DBF |
+        0x4E00..=0x9FFF |   // ideogramas unificados
+        0xA000..=0xA4CF |
+        0xAC00..=0xD7AF |   // sílabas de Hangul
+        0xF900..=0xFAFF |
+        0xFE30..=0xFE4F |
+        0xFF00..=0xFF60 |   // formas de largura cheia
+        0xFFE0..=0xFFE6 |
+        0x20000..=0x2FA1F
+    )
+}
+
+/// A pontuação que não pode começar linha.
+fn e_fecho(c: char) -> bool {
+    matches!(
+        c,
+        '。' | '，' | '、' | '；' | '：' | '？' | '！' | '）' | '］' | '｝' | '」' | '』' | '】'
+            | '》' | '〉' | '”' | '’' | '·' | '…' | '—' | '～' | '％' | '〟'
+    )
 }
 
 #[cfg(test)]
@@ -2032,5 +2117,28 @@ mod testes_do_html {
     fn a_linha_quebra_pela_largura() {
         let linhas = quebra_linhas("aa bb cc", 5, |t| t.len() as u32);
         assert_eq!(linhas, ["aa bb", "cc"]);
+    }
+
+    /// O chinês não tem espaço: a quebra tem de ser entre ideogramas, senão o parágrafo inteiro
+    /// vira uma linha só e o fim do texto se perde no recorte.
+    #[test]
+    fn o_chines_quebra_entre_ideogramas() {
+        let mede = |t: &str| t.chars().count() as u32;
+        assert_eq!(quebra_linhas("你好世界", 2, mede), ["你好", "世界"]);
+        assert_eq!(quebra_linhas("你好世界", 3, mede), ["你好世", "界"]);
+    }
+
+    /// A vírgula chinesa fecha o ideograma e não começa linha.
+    #[test]
+    fn a_pontuacao_anda_com_o_ideograma_anterior() {
+        let mede = |t: &str| t.chars().count() as u32;
+        assert_eq!(quebra_linhas("你好，世界", 3, mede), ["你好，", "世界"]);
+    }
+
+    /// Texto misturado: as palavras latinas continuam inteiras e com o espaço que tinham.
+    #[test]
+    fn o_espaco_entre_idiomas_sobrevive() {
+        let mede = |t: &str| t.chars().count() as u32;
+        assert_eq!(quebra_linhas("中文 abc", 20, mede), ["中文 abc"]);
     }
 }

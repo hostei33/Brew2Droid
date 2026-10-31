@@ -116,6 +116,10 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Rasterização de glifo para o `IDISPLAY_DrawText`: escrever um interpretador de TrueType seria
 # reinventar mal.
 ab_glyph = "0.2"
+# Só para saber **qual** face abrir dentro de um `.ttc`: a `NotoSansCJK-Regular.ttc` traz JP, KR,
+# SC, TC e HK no mesmo arquivo, e o `ab_glyph` abre por índice sem dizer qual é qual. É a mesma
+# versão que o `ab_glyph` já traz, então não há compilação a mais.
+ttf-parser = "0.25"
 # Só o JPEG dos ícones de `.mif`. O resto da decodificação de imagem é nossa.
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["std"] }
 # A música de nove jogos é MP3 — Quake, Quake 2, Galaxy on Fire, Rally Master Pro, Powerboat,

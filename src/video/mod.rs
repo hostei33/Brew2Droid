@@ -7,6 +7,7 @@ pub mod contexto;
 pub mod gpu;
 pub mod display;
 pub mod font;
+pub mod font_sistema;
 pub mod gif;
 pub mod gles;
 pub mod icon;

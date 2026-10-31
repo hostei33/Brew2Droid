@@ -21,6 +21,24 @@ The project is under active development. Compatibility and performance vary betw
 - Per-game resolution, orientation, scaling, and control profiles.
 - Hardware-accelerated graphics.
 - Sound and volume settings.
+- Chinese, Japanese and Korean text: the game keeps its own font, and the characters it lacks come
+  from the system font (Noto Sans CJK on Android), so translated games no longer lose the ideograms.
+
+### Fonts
+
+A game draws text with the `.ttf` it ships. A translation replaces the strings and not the font, and
+a font like the 191 KB `tectoy.ttf` has no ideograph at all. When the game's font does not draw a
+character, the emulator looks for a fallback, in this order:
+
+1. `ZEEBX_CJK_FONT` — a path, for pinning one specific font;
+2. `<device root>/shared/fonts/` — drop a `.ttf`/`.otf`/`.ttc` there to use it;
+3. the Android system fonts (`/system/fonts`, `/product/fonts`) — Noto Sans CJK, Droid Sans Fallback;
+4. the desktop fonts, when running on a PC.
+
+The fallback is only consulted for characters the game's font does not have, and it is scaled to the
+same `em`, so the Latin text keeps the look and the line height the game was designed around. If the
+game ships no font at all, the system font becomes the main one. `.ttc` collections are opened on the
+Simplified Chinese face, not on the first one.
 
 ## Screenshots
 

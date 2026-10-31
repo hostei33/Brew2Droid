@@ -4639,6 +4639,7 @@ dependencies = [
  "sevenz-rust2",
  "sha2",
  "symphonia",
+ "ttf-parser",
  "ureq",
  "zip",
  "zune-jpeg",

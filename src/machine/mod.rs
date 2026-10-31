@@ -3480,7 +3480,15 @@ impl<C: CpuBackend> Machine<C> {
             pending_text: Vec::new(),
             // A fonte do aparelho sai da raiz que este motor recebeu, não da configuração do
             // desktop: é isso que faz a fonte instalada pelo frontend ser encontrada.
-            font: font_do_modulo(&raiz).or_else(|| fonte_do_console(&aparelho)),
+            //
+            // A do jogo vem primeiro, e a do sistema entra atrás dela como **reserva**: a fonte
+            // que o jogo empacota não tem ideograma, e uma tradução chinesa sem reserva desenhava
+            // só os números. Sem fonte nenhuma, a do sistema vira a principal — é o que faz o
+            // texto de um jogo que não trouxe `.ttf` aparecer.
+            font: crate::video::font_sistema::com_reserva(
+                font_do_modulo(&raiz).or_else(|| fonte_do_console(&aparelho)),
+                &aparelho,
+            ),
             // O banco de amostras do MIDI, quando o aparelho tem um. É opcional de propósito: o
             // banco não vem embutido, e sem ele a música volta para a tabela de timbres.
             #[cfg(feature = "soundfont")]
